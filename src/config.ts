@@ -14,6 +14,11 @@ const envSchema = z.object({
   // API Configuration
   RSS_SECRET: z.string().min(8),
   PORT: z.coerce.number().default(8080),
+
+  // CloudMailin Configuration (for forwarding emails for review)
+  CLOUDMAILIN_USERNAME: z.string().optional(),
+  CLOUDMAILIN_API_KEY: z.string().optional(),
+  REVIEW_RECIPIENT_EMAIL: z.string().email().optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

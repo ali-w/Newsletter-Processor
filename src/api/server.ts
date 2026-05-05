@@ -1,4 +1,5 @@
 import express from 'express';
+import { MessageClient } from 'cloudmailin';
 import { config } from '../config';
 import { extractArticles, summarizeArticleFromUrl } from '../llm/parser';
 import { insertNewsletter, insertArticle, getLatestArticles, getArticleById } from '../db/database';
@@ -47,7 +48,7 @@ app.post('/webhook/cloudmailin', async (req, res) => {
     }
 
     const payload = req.body;
-    
+
     // Extract metadata from CloudMailin JSON Normalized format
     const senderName = payload.envelope?.from || payload.headers?.From || 'Unknown Sender';
     const receivedAtStr = payload.headers?.Date;
@@ -66,7 +67,27 @@ app.post('/webhook/cloudmailin', async (req, res) => {
 
     if (articles.length === 0) {
       console.log(`⚠️  No articles extracted from newsletter by "${senderName}".`);
-      // We still return 200 to CloudMailin to acknowledge receipt
+      // Forward for manual review if CloudMailin is configured
+      if (config.CLOUDMAILIN_USERNAME && config.CLOUDMAILIN_API_KEY && config.REVIEW_RECIPIENT_EMAIL) {
+        try {
+          console.log(`✉️  Forwarding newsletter from "${senderName}" for manual review...`);
+          const client = new MessageClient({
+            username: config.CLOUDMAILIN_USERNAME,
+            apiKey: config.CLOUDMAILIN_API_KEY
+          });
+          await client.sendMessage({
+            to: config.REVIEW_RECIPIENT_EMAIL,
+            from: 'newsletter-processor@cloudmailin.net',
+            subject: `Manual Review Required: Newsletter from ${senderName}`,
+            plain: payload.plain || 'No plain text content available.',
+            html: payload.html || content
+          });
+          console.log(`✅ Forwarded to ${config.REVIEW_RECIPIENT_EMAIL}`);
+        } catch (forwardErr) {
+          console.error(`❌ Failed to forward email:`, forwardErr);
+        }
+      }
+
       return res.status(200).json({ status: "success", message: "No articles found" });
     }
 
