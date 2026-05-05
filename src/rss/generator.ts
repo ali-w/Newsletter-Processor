@@ -1,5 +1,6 @@
 import RSS from 'rss';
 
+
 interface RssArticle {
   id: number;
   title: string;
@@ -9,12 +10,12 @@ interface RssArticle {
   newsletter_name: string;
 }
 
-export function generateRssFeed(articles: RssArticle[]): string {
+export function generateRssFeed(articles: RssArticle[], baseUrl: string, rssSecret: string): string {
   const feed = new RSS({
     title: 'Newsletter Processor Feed',
     description: 'Articles extracted from email newsletters',
-    feed_url: 'https://newsletter-processor-660809700014.europe-west2.run.app/rss',
-    site_url: 'https://newsletter-processor-660809700014.europe-west2.run.app',
+    feed_url: `${baseUrl}/rss`,
+    site_url: baseUrl,
     language: 'en',
     pubDate: new Date().toUTCString(),
   });
@@ -31,6 +32,9 @@ export function generateRssFeed(articles: RssArticle[]): string {
       guid: `article-${article.id}`,
       date: article.received_at, // Use the newsletter received_at date
       author: article.newsletter_name,
+      custom_elements: [
+        { comments: `${baseUrl}/summarize/${article.id}?secret=${rssSecret}` }
+      ]
     });
   }
 

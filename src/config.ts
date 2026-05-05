@@ -14,6 +14,7 @@ const envSchema = z.object({
   // API Configuration
   RSS_SECRET: z.string().min(8),
   PORT: z.coerce.number().default(8080),
+  SERVICE_URL: z.string().url(),
 
   // CloudMailin Configuration (for forwarding emails for review)
   CLOUDMAILIN_USERNAME: z.string().optional(),

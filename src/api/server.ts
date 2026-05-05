@@ -23,7 +23,7 @@ app.get('/rss', async (req, res) => {
     const safeLimit = isNaN(parsedLimit) || parsedLimit <= 0 ? defaultLimit : Math.min(parsedLimit, 30);
 
     const articles = await getLatestArticles(safeLimit);
-    const xml = generateRssFeed(articles as any[]);
+    const xml = generateRssFeed(articles as any[], config.SERVICE_URL, config.RSS_SECRET);
 
     res.set('Content-Type', 'application/rss+xml');
     res.send(xml);
@@ -77,7 +77,7 @@ app.post('/webhook/cloudmailin', async (req, res) => {
           });
           await client.sendMessage({
             to: config.REVIEW_RECIPIENT_EMAIL,
-            from: 'newsletter-processor@cloudmailin.net',
+            from: 'newsletterprocessing-fail@infinitefunk.co.uk',
             subject: `Manual Review Required: Newsletter from ${senderName}`,
             plain: payload.plain || 'No plain text content available.',
             html: payload.html || content
