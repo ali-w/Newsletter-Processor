@@ -1,13 +1,12 @@
 import express from 'express';
 import { config } from '../config';
-import { processEmails } from '../pop3/client';
 import { extractArticles, summarizeArticleFromUrl } from '../llm/parser';
 import { insertNewsletter, insertArticle, getLatestArticles, getArticleById } from '../db/database';
 import { generateRssFeed } from '../rss/generator';
 
 export const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 
 // RSS Feed Endpoint (Protected by secret)
 app.get('/rss', async (req, res) => {
@@ -33,70 +32,60 @@ app.get('/rss', async (req, res) => {
   }
 });
 
-// Processing Trigger Endpoint
-// In production, this can be triggered by Cloud Scheduler or manually in a browser.
-app.get('/process', async (req, res) => {
+/**
+ * CloudMailin Webhook Endpoint
+ * Expects CloudMailin JSON Normalized payload.
+ * POST /webhook/cloudmailin?secret=YOUR_SECRET
+ */
+app.post('/webhook/cloudmailin', async (req, res) => {
   try {
     const { secret } = req.query;
-    // Also allow secret in body for convenience with POST requests
-    const providedSecret = secret || req.body?.secret;
 
-    if (providedSecret !== config.RSS_SECRET) {
-      console.warn("⚠️  Unauthorized attempt to trigger processing.");
+    if (secret !== config.RSS_SECRET) {
+      console.warn("⚠️  Unauthorized attempt to post to webhook.");
       return res.status(401).json({ status: "error", message: "Unauthorized" });
     }
 
-    console.log("🚀 Triggered newsletter processing...");
+    const payload = req.body;
+    
+    // Extract metadata from CloudMailin JSON Normalized format
+    const senderName = payload.envelope?.from || payload.headers?.From || 'Unknown Sender';
+    const receivedAtStr = payload.headers?.Date;
+    const receivedAt = receivedAtStr ? new Date(receivedAtStr) : new Date();
+    const content = payload.html || payload.plain || '';
 
-    const result = await processEmails(async (email) => {
-      console.log(`🔍 Extracting articles for newsletter from "${email.senderName}"...`);
-
-      // Extract articles via LLM (retries internally with exponential backoff)
-      const articles = await extractArticles(email.content);
-
-      if (articles.length === 0) {
-        console.log(`⚠️  No articles extracted from newsletter by "${email.senderName}". Skipping DB insert.`);
-        return;
-      }
-
-      // Store in DB
-      const newsletterId = await insertNewsletter(email.senderName, email.receivedAt);
-
-      for (const article of articles) {
-        await insertArticle(newsletterId, article);
-      }
-
-      console.log(`✅ Saved ${articles.length} article(s) from "${email.senderName}".`);
-    });
-
-    const { processed, failed, failedSenders } = result;
-
-    if (processed === 0 && failed === 0) {
-      return res.status(200).json({ status: "success", message: "No new emails found" });
+    if (!content) {
+      console.warn(`⚠️  Received empty content from "${senderName}".`);
+      return res.status(400).json({ status: "error", message: "No content found in email" });
     }
 
-    if (failed > 0) {
-      // Some emails failed — report a 500 so Cloud Scheduler knows to retry the job
-      console.error(
-        `⚠️  Processing completed with ${failed} failure(s). ` +
-        `Failed senders: ${failedSenders.join(', ')}. ` +
-        `${processed} email(s) processed successfully.`
-      );
-      return res.status(500).json({
-        status: "partial_failure",
-        message: `${processed} email(s) processed successfully, ${failed} failed.`,
-        failedSenders,
-      });
+    console.log(`🚀 Processing incoming newsletter from "${senderName}"...`);
+
+    // Extract articles via LLM
+    const articles = await extractArticles(content);
+
+    if (articles.length === 0) {
+      console.log(`⚠️  No articles extracted from newsletter by "${senderName}".`);
+      // We still return 200 to CloudMailin to acknowledge receipt
+      return res.status(200).json({ status: "success", message: "No articles found" });
     }
+
+    // Store in DB
+    const newsletterId = await insertNewsletter(senderName, receivedAt);
+
+    for (const article of articles) {
+      await insertArticle(newsletterId, article);
+    }
+
+    console.log(`✅ Saved ${articles.length} article(s) from "${senderName}".`);
 
     return res.status(200).json({
       status: "success",
-      message: `Successfully processed ${processed} email(s).`,
+      message: `Successfully processed newsletter with ${articles.length} articles.`,
     });
 
   } catch (err) {
-    // Unexpected / fatal error (e.g. POP3 connection failure)
-    console.error("❌ Fatal error during processing:", err instanceof Error ? err.message : err);
+    console.error("❌ Error processing CloudMailin webhook:", err instanceof Error ? err.message : err);
     return res.status(500).json({ status: "error", message: "Internal server error during processing" });
   }
 });

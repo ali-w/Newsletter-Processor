@@ -4,13 +4,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const envSchema = z.object({
-  // Mail Configuration (IMAP but using existing POP3 names for convenience)
-  POP3_HOST: z.string(),
-  POP3_PORT: z.coerce.number().default(993), // IMAP default
-  POP3_USERNAME: z.string(),
-  POP3_PASSWORD: z.string(),
-  POP3_TLS: z.preprocess((val) => val === 'true' || val === true, z.boolean().default(true)),
-
   // LLM Configuration
   GEMINI_API_KEY: z.string(),
 
