@@ -62,7 +62,15 @@ export async function insertArticle(newsletterId: number, article: Article) {
 export async function getLatestArticles(limit: number) {
   const result = await db.execute({
     sql: `
-      SELECT a.id, a.title, a.summary, a.url, n.received_at, n.name as newsletter_name 
+      SELECT 
+        a.id, 
+        a.newsletter_id, 
+        a.title, 
+        a.summary, 
+        a.url, 
+        a.created_at as article_created_at,
+        n.name as newsletter_name, 
+        n.received_at
       FROM articles a
       JOIN newsletters n ON a.newsletter_id = n.id
       ORDER BY n.received_at DESC, a.id ASC

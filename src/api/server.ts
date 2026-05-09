@@ -26,10 +26,36 @@ app.get('/rss', async (req, res) => {
     const xml = generateRssFeed(articles as any[], config.SERVICE_URL, config.RSS_SECRET);
 
     res.set('Content-Type', 'application/rss+xml');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET');
     res.send(xml);
   } catch (err) {
     console.error("❌ Error generating RSS feed:", err);
     res.status(500).send('Internal Server Error');
+  }
+});
+
+// JSON Feed Endpoint (Mirror of RSS, returns all fields)
+app.get('/articles', async (req, res) => {
+  try {
+    const { secret, limit } = req.query;
+
+    if (secret !== config.RSS_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const defaultLimit = 30;
+    const parsedLimit = limit ? parseInt(limit as string, 10) : defaultLimit;
+    const safeLimit = isNaN(parsedLimit) || parsedLimit <= 0 ? defaultLimit : Math.min(parsedLimit, 30);
+
+    const articles = await getLatestArticles(safeLimit);
+    
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET');
+    res.json(articles);
+  } catch (err) {
+    console.error("❌ Error fetching articles JSON:", err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
@@ -139,6 +165,8 @@ app.get('/summarize/:id', async (req, res) => {
     const summary = await summarizeArticleFromUrl(article.url, article.title);
 
     res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET');
     return res.status(200).send(summary);
 
   } catch (err) {

@@ -24,9 +24,8 @@ export function generateRssFeed(articles: RssArticle[], baseUrl: string, rssSecr
     feed.item({
       title: article.title,
       description: `
-        <p><strong>Article ID:</strong> ${article.id}</p>
-        <p><strong>From:</strong> ${article.newsletter_name}</p>
         <p>${article.summary}</p>
+        <p><small><strong>From:</strong> ${article.newsletter_name}</small></p>
       `,
       url: article.url,
       guid: `article-${article.id}`,
