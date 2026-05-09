@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json({ limit: '5mb' }));
 
 app.post('/webhook/cloudmailin', async (req, res) => {
-  const secret = (req.headers['x-api-key'] as string | undefined) ?? (req.query.secret as string | undefined);
+  const secret = (req.headers['x-api-key'] as string | undefined) ?? (req.query?.secret as string | undefined);
   if (secret !== config.RSS_SECRET) {
     logger.warn('Unauthorized attempt to post to ingest webhook');
     return res.status(401).json({ error: 'Unauthorized' });
