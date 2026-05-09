@@ -36,6 +36,7 @@ param(
 
   [string]$Region    = 'europe-west1',
   [string]$QueueName = 'newsletter-ingest',
+  [string]$Function  = '',
   [switch]$RunMigration,
   [switch]$Setup
 )
@@ -130,7 +131,8 @@ $pkg = Get-Content 'package.json' -Raw | ConvertFrom-Json
 $pkg.scripts = [PSCustomObject]@{}
 $pkg.main = 'deploy-index.js'
 $json = $pkg | ConvertTo-Json -Depth 10
-[System.IO.File]::WriteAllText("$PWD\deploy\dist\package.json", $json, [System.Text.Encoding]::UTF8)
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText("$PWD\deploy\dist\package.json", $json, $utf8NoBom)
 Copy-Item 'package-lock.json' 'deploy/dist/package-lock.json' -Force
 
 # ---------------------------------------------------------------------------
@@ -171,28 +173,38 @@ if ($Setup) {
 # Step 4: Deploy reader-api, summarize, ingest-worker
 # ---------------------------------------------------------------------------
 
-Publish-Function -Name 'reader-api'    -EntryPoint 'readerApi'    -Timeout '60s'  -EnvVars $commonEnvVars
-Publish-Function -Name 'summarize'     -EntryPoint 'summarize'    -Timeout '540s' -EnvVars $commonEnvVars
-Publish-Function -Name 'ingest-worker' -EntryPoint 'ingestWorker' -Timeout '540s' -EnvVars $commonEnvVars
+$deployAll = ($Function -eq '')
+
+if ($deployAll -or $Function -eq 'reader-api') {
+  Publish-Function -Name 'reader-api'    -EntryPoint 'readerApi'    -Timeout '60s'  -EnvVars $commonEnvVars
+}
+if ($deployAll -or $Function -eq 'summarize') {
+  Publish-Function -Name 'summarize'     -EntryPoint 'summarize'    -Timeout '540s' -EnvVars $commonEnvVars
+}
+if ($deployAll -or $Function -eq 'ingest-worker') {
+  Publish-Function -Name 'ingest-worker' -EntryPoint 'ingestWorker' -Timeout '540s' -EnvVars $commonEnvVars
+}
 
 # ---------------------------------------------------------------------------
 # Step 5: Capture ingest-worker URL, then deploy ingest with it
 # ---------------------------------------------------------------------------
 
-Write-Host "`nFetching ingest-worker URL..." -ForegroundColor Yellow
-$IngestWorkerUrl = Get-FunctionUrl 'ingest-worker'
+if ($deployAll -or $Function -eq 'ingest') {
+  Write-Host "`nFetching ingest-worker URL..." -ForegroundColor Yellow
+  $IngestWorkerUrl = Get-FunctionUrl 'ingest-worker'
 
-if (-not $IngestWorkerUrl) {
-  Write-Error 'Could not retrieve ingest-worker URL. Deploy of ingest function aborted.'
-  exit 1
+  if (-not $IngestWorkerUrl) {
+    Write-Error 'Could not retrieve ingest-worker URL. Deploy of ingest function aborted.'
+    exit 1
+  }
+
+  Write-Host "  ingest-worker URL: $IngestWorkerUrl" -ForegroundColor Gray
+
+  $ingestEnvVars = $commonEnvVars.Clone()
+  $ingestEnvVars['INGEST_WORKER_URL'] = $IngestWorkerUrl
+
+  Publish-Function -Name 'ingest' -EntryPoint 'ingest' -Timeout '30s' -EnvVars $ingestEnvVars
 }
-
-Write-Host "  ingest-worker URL: $IngestWorkerUrl" -ForegroundColor Gray
-
-$ingestEnvVars = $commonEnvVars.Clone()
-$ingestEnvVars['INGEST_WORKER_URL'] = $IngestWorkerUrl
-
-Publish-Function -Name 'ingest' -EntryPoint 'ingest' -Timeout '30s' -EnvVars $ingestEnvVars
 
 # ---------------------------------------------------------------------------
 # Step 6: Post-deploy summary
