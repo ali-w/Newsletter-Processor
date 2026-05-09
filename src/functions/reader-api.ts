@@ -1,38 +1,36 @@
 import express from 'express';
+import cors from 'cors';
 import { HttpFunction } from '@google-cloud/functions-framework';
 import { config } from '../config';
 import { logger } from '../logger';
 import { getLatestArticles, updateArticle, updateArticles, ArticlePatch } from '../db/database';
 import { generateRssFeed } from '../rss/generator';
+import { parseJsonBody } from './parseBody';
 
 const router = express.Router();
-router.use(express.json({ limit: '5mb' }));
-
-router.use((req, res, next) => {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, PATCH, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  next();
-});
+router.use(parseJsonBody);
 
 const HARD_CAP = 200;
 const DEFAULT_LIMIT = 50;
 
-function parseLimit(raw: unknown): number {
-  const n = parseInt(String(raw), 10);
+function getQueryParam(req: express.Request, name: string): string | undefined {
+  return new URL(req.url, 'https://localhost').searchParams.get(name) ?? undefined;
+}
+
+function parseLimit(req: express.Request): number {
+  const n = parseInt(getQueryParam(req, 'limit') ?? '', 10);
   if (isNaN(n) || n <= 0) return Math.min(DEFAULT_LIMIT, config.ARTICLES_MAX_LIMIT);
   return Math.min(n, HARD_CAP, config.ARTICLES_MAX_LIMIT);
 }
 
 function getSecret(req: express.Request): string | undefined {
-  return (req.headers['x-api-key'] as string | undefined) ?? (req.query.secret as string | undefined);
+  return (req.headers['x-api-key'] as string | undefined) ?? getQueryParam(req, 'secret');
 }
 
 router.get('/rss', async (req, res) => {
   try {
     if (getSecret(req) !== config.RSS_SECRET) return res.status(401).send('Unauthorized');
-    const articles = await getLatestArticles(parseLimit(req.query.limit));
+    const articles = await getLatestArticles(parseLimit(req));
     const xml = generateRssFeed(articles as any[], config.SERVICE_URL);
     res.set('Content-Type', 'application/rss+xml');
     res.send(xml);
@@ -45,7 +43,7 @@ router.get('/rss', async (req, res) => {
 router.get('/articles', async (req, res) => {
   try {
     if (getSecret(req) !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
-    const articles = await getLatestArticles(parseLimit(req.query.limit));
+    const articles = await getLatestArticles(parseLimit(req));
     res.json(articles);
   } catch (err) {
     logger.error('Error fetching articles JSON', { error: String(err) });
@@ -108,4 +106,12 @@ router.post('/articles/updates', async (req, res) => {
 const app = express();
 app.use(router);
 
-export const readerApi: HttpFunction = (req, res) => app(req, res);
+const corsMiddleware = cors({
+  origin: '*',
+  methods: ['GET', 'PATCH', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-Api-Key'],
+});
+
+export const readerApi: HttpFunction = (req, res) => {
+  corsMiddleware(req, res, () => app(req, res));
+};

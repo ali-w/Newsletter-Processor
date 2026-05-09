@@ -9,7 +9,8 @@ const app = express();
 
 app.get('/articles/:id/summary', async (req, res) => {
   try {
-    const secret = (req.headers['x-api-key'] as string | undefined) ?? (req.query.secret as string | undefined);
+    const secret = (req.headers['x-api-key'] as string | undefined)
+      ?? (new URL(req.url, 'https://localhost').searchParams.get('secret') ?? undefined);
     if (secret !== config.RSS_SECRET) return res.status(401).send('Unauthorized');
 
     const id = parseInt(req.params.id, 10);
@@ -32,4 +33,13 @@ app.get('/articles/:id/summary', async (req, res) => {
   }
 });
 
-export const summarize: HttpFunction = (req, res) => app(req, res);
+export const summarize: HttpFunction = (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  app(req, res);
+};

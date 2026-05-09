@@ -5,9 +5,10 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { extractArticles } from '../llm/parser';
 import { insertNewsletter, insertArticle } from '../db/database';
+import { parseJsonBody } from './parseBody';
 
 const app = express();
-app.use(express.json({ limit: '5mb' }));
+app.use(parseJsonBody);
 
 app.post('/', async (req, res) => {
   // Cloud Tasks sets this header — confirms the request originated from the queue

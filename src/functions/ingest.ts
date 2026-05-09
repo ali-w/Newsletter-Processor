@@ -1,11 +1,12 @@
 import express from 'express';
-import { HttpFunction } from '@google-cloud/functions-framework';
+import { HttpFunction, Request as FnRequest } from '@google-cloud/functions-framework';
 import { CloudTasksClient } from '@google-cloud/tasks';
 import { config } from '../config';
 import { logger } from '../logger';
+import { parseJsonBody } from './parseBody';
 
 const app = express();
-app.use(express.json({ limit: '5mb' }));
+app.use(parseJsonBody);
 
 // Initialised once at module load; fallback:true uses REST instead of gRPC,
 // avoiding gRPC name-resolution timeouts in Cloud Run cold starts.
@@ -19,12 +20,9 @@ app.post('/webhook/cloudmailin', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // Respond immediately so CloudMailin does not timeout and retry
-  res.status(202).json({ status: 'accepted' });
-
   if (!config.GCP_PROJECT || !config.INGEST_WORKER_URL) {
-    logger.error('GCP_PROJECT or INGEST_WORKER_URL not configured — cannot enqueue task');
-    return;
+    logger.error('GCP_PROJECT or INGEST_WORKER_URL not configured - cannot enqueue task');
+    return res.status(500).json({ error: 'Service misconfigured' });
   }
 
   try {
@@ -41,8 +39,10 @@ app.post('/webhook/cloudmailin', async (req, res) => {
 
     const [response] = await tasksClient.createTask({ parent, task });
     logger.info('Ingest task enqueued', { taskName: response.name });
+    return res.status(202).json({ status: 'accepted' });
   } catch (err) {
     logger.error('Failed to enqueue ingest task', { error: err instanceof Error ? err.message : String(err) });
+    return res.status(500).json({ error: 'Failed to enqueue task' });
   }
 });
 
