@@ -64,7 +64,13 @@ jobs:
 
       - name: Stage package manifests for gcloud upload
         run: |
-          cp package.json      deploy/dist/package.json
+          # Strip all scripts so Cloud Build only runs npm ci (install), never tsc.
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.scripts = {};
+            fs.writeFileSync('deploy/dist/package.json', JSON.stringify(pkg, null, 2));
+          "
           cp package-lock.json deploy/dist/package-lock.json
 
       - name: Authenticate to GCP

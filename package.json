@@ -6,7 +6,6 @@
   "scripts": {
     "build": "tsc",
     "build:functions": "tsc -p tsconfig.functions.json",
-    "gcp-build": "echo 'Pre-compiled — skipping Cloud Build tsc step'",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "migrate": "ts-node src/db/migrate.ts",
