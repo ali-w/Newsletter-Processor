@@ -11,23 +11,17 @@
 .PARAMETER QueueName
   Cloud Tasks queue name. Default: newsletter-ingest.
 
+.PARAMETER RunMigration
+  Switch. Pass to run the database migration before deploying.
+  Credentials are fetched from Secret Manager automatically.
+  Omit on routine deployments where no schema changes were made.
+
 .PARAMETER Setup
   Switch. Pass on first run to enable APIs and create the Cloud Tasks queue.
   Secrets must already exist in Secret Manager before deploying.
 
-.NOTES
-  Sensitive configuration is read from GCP Secret Manager at runtime.
-  The following secrets must exist in Secret Manager before running this script:
-    CLOUDMAILIN_API_KEY, CLOUDMAILIN_USERNAME, GEMINI_API_KEY,
-    REVIEW_RECIPIENT_EMAIL, RSS_SECRET, SERVICE_URL,
-    TURSO_AUTH_TOKEN, TURSO_DATABASE_URL
-
-  The migration step (npm run migrate) reads from your LOCAL environment.
-  Ensure GEMINI_API_KEY, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, RSS_SECRET,
-  and SERVICE_URL are set in the current shell before running this script.
-
 .EXAMPLE
-  .\deploy.ps1 -ProjectId my-gcp-project -Setup
+  .\deploy.ps1 -ProjectId my-gcp-project -Setup -RunMigration
   .\deploy.ps1 -ProjectId my-gcp-project
 #>
 
@@ -37,6 +31,7 @@ param(
 
   [string]$Region    = 'europe-west1',
   [string]$QueueName = 'newsletter-ingest',
+  [switch]$RunMigration,
   [switch]$Setup
 )
 
@@ -44,7 +39,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------------------------------------------------------
-# Secrets — sourced from GCP Secret Manager at function runtime
+# Secrets - sourced from GCP Secret Manager at function runtime
 # ---------------------------------------------------------------------------
 
 $commonSecrets = (
@@ -59,7 +54,7 @@ $commonSecrets = (
 ) -join ','
 
 # ---------------------------------------------------------------------------
-# Non-secret operational vars — safe to pass as plain env vars
+# Non-secret operational vars - safe to pass as plain env vars
 # ---------------------------------------------------------------------------
 
 $ArticlesMaxLimit = if ($env:ARTICLES_MAX_LIMIT) { $env:ARTICLES_MAX_LIMIT } else { '200' }
@@ -123,30 +118,45 @@ Write-Host 'Building TypeScript (functions target)...' -ForegroundColor Yellow
 npm run build:functions
 if ($LASTEXITCODE -ne 0) { Write-Error 'Build failed.'; exit $LASTEXITCODE }
 
-# Copy package manifests into the output directory so gcloud can install deps
-Copy-Item 'package.json'      'deploy/dist/package.json'      -Force
+# Stage a production package.json into deploy/dist:
+#   - scripts cleared so Cloud Build does not attempt to run tsc
+#   - main set to deploy-index.js (the compiled functions entry point)
+$pkg = Get-Content 'package.json' -Raw | ConvertFrom-Json
+$pkg.scripts = [PSCustomObject]@{}
+$pkg.main = 'deploy-index.js'
+$json = $pkg | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText("$PWD\deploy\dist\package.json", $json, [System.Text.Encoding]::UTF8)
 Copy-Item 'package-lock.json' 'deploy/dist/package-lock.json' -Force
 
 # ---------------------------------------------------------------------------
-# Step 2: Migrate (reads from local environment — see .NOTES above)
+# Step 2: Migrate (optional - pass -RunMigration to enable)
 # ---------------------------------------------------------------------------
 
-Write-Host "`nRunning database migration..." -ForegroundColor Yellow
-npm run migrate
-if ($LASTEXITCODE -ne 0) { Write-Error 'Migration failed.'; exit $LASTEXITCODE }
+if ($RunMigration) {
+  Write-Host "`nRunning database migration..." -ForegroundColor Yellow
+  Write-Host "  Fetching credentials from Secret Manager..." -ForegroundColor Gray
+
+  $env:TURSO_DATABASE_URL = gcloud secrets versions access latest --secret=TURSO_DATABASE_URL --project=$ProjectId
+  $env:TURSO_AUTH_TOKEN   = gcloud secrets versions access latest --secret=TURSO_AUTH_TOKEN   --project=$ProjectId
+  $env:GEMINI_API_KEY     = gcloud secrets versions access latest --secret=GEMINI_API_KEY     --project=$ProjectId
+  $env:RSS_SECRET         = gcloud secrets versions access latest --secret=RSS_SECRET         --project=$ProjectId
+  $env:SERVICE_URL        = gcloud secrets versions access latest --secret=SERVICE_URL        --project=$ProjectId
+
+  npm run migrate
+  if ($LASTEXITCODE -ne 0) { Write-Error 'Migration failed.'; exit $LASTEXITCODE }
+
+  Remove-Item Env:TURSO_DATABASE_URL, Env:TURSO_AUTH_TOKEN, Env:GEMINI_API_KEY, Env:RSS_SECRET, Env:SERVICE_URL -ErrorAction SilentlyContinue
+} else {
+  Write-Host "`nSkipping migration (pass -RunMigration to run)." -ForegroundColor Gray
+}
 
 # ---------------------------------------------------------------------------
-# Step 3: First-run setup (optional)
+# Step 3: First-run setup (optional - pass -Setup to enable)
 # ---------------------------------------------------------------------------
 
 if ($Setup) {
   Write-Host "`nEnabling required GCP APIs..." -ForegroundColor Yellow
-  gcloud services enable `
-    cloudfunctions.googleapis.com `
-    cloudbuild.googleapis.com `
-    cloudtasks.googleapis.com `
-    secretmanager.googleapis.com `
-    --project=$ProjectId
+  gcloud services enable cloudfunctions.googleapis.com cloudbuild.googleapis.com run.googleapis.com artifactregistry.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com --project=$ProjectId
 
   Write-Host "`nCreating Cloud Tasks queue '$QueueName' in $Region..." -ForegroundColor Yellow
   gcloud tasks queues create $QueueName --location=$Region --project=$ProjectId
@@ -172,7 +182,7 @@ if (-not $IngestWorkerUrl) {
   exit 1
 }
 
-Write-Host "ingest-worker URL: $IngestWorkerUrl" -ForegroundColor Gray
+Write-Host "  ingest-worker URL: $IngestWorkerUrl" -ForegroundColor Gray
 
 $ingestEnvVars = $commonEnvVars.Clone()
 $ingestEnvVars['INGEST_WORKER_URL'] = $IngestWorkerUrl

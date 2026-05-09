@@ -27,7 +27,7 @@ on:
       skip_migration:
         description: 'Skip database migration'
         type: boolean
-        default: false
+        default: true
 
 env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
