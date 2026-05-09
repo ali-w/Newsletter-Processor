@@ -15,12 +15,9 @@
 #   GCP_SERVICE_ACCOUNT            — Service account email used for deployment
 #                                    e.g. deploy-sa@my-project.iam.gserviceaccount.com
 #
-#   The following are only needed for the migration step (npm run migrate reads from env):
-#   GEMINI_API_KEY, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, RSS_SECRET, SERVICE_URL
-#
-# All other sensitive config (API keys, DB credentials) is read from GCP Secret Manager
-# at function runtime via --set-secrets. Those secrets must exist in Secret Manager
-# before running this workflow.
+# All sensitive config is read from GCP Secret Manager — both at function runtime
+# (via --set-secrets) and during the migration step (fetched via gcloud at run time).
+# No application secrets need to be stored in GitHub.
 #
 # Setting up Workload Identity Federation:
 #   https://github.com/google-github-actions/auth?tab=readme-ov-file#workload-identity-federation-through-a-service-account
@@ -85,13 +82,16 @@ jobs:
 
       - name: Run database migration
         if: ${{ !inputs.skip_migration }}
-        env:
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
-          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
-          TURSO_AUTH_TOKEN:   ${{ secrets.TURSO_AUTH_TOKEN }}
-          RSS_SECRET:         ${{ secrets.RSS_SECRET }}
-          SERVICE_URL:        ${{ secrets.SERVICE_URL }}
-        run: npm run migrate
+        run: |
+          # Pull required vars from Secret Manager — runner is already authenticated above.
+          # Only TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are used by the migration itself;
+          # the others satisfy config.ts validation at import time.
+          export TURSO_DATABASE_URL=$(gcloud secrets versions access latest --secret=TURSO_DATABASE_URL --project="$GCP_PROJECT")
+          export TURSO_AUTH_TOKEN=$(gcloud secrets versions access latest --secret=TURSO_AUTH_TOKEN --project="$GCP_PROJECT")
+          export GEMINI_API_KEY=$(gcloud secrets versions access latest --secret=GEMINI_API_KEY --project="$GCP_PROJECT")
+          export RSS_SECRET=$(gcloud secrets versions access latest --secret=RSS_SECRET --project="$GCP_PROJECT")
+          export SERVICE_URL=$(gcloud secrets versions access latest --secret=SERVICE_URL --project="$GCP_PROJECT")
+          npm run migrate
 
       # Deploy reader-api and summarize in parallel (independent of each other)
 

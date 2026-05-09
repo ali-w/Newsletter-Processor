@@ -173,11 +173,9 @@ Write-Host ''
 Write-Host 'Repository SECRETS (Settings -> Secrets):' -ForegroundColor Yellow
 Write-Host "  GCP_WORKLOAD_IDENTITY_PROVIDER  =  $ProviderResourceName"
 Write-Host "  GCP_SERVICE_ACCOUNT             =  $SA"
-Write-Host "  GEMINI_API_KEY                  =  (as stored in Secret Manager)"
-Write-Host "  TURSO_DATABASE_URL              =  (as stored in Secret Manager)"
-Write-Host "  TURSO_AUTH_TOKEN                =  (as stored in Secret Manager)"
-Write-Host "  RSS_SECRET                      =  (as stored in Secret Manager)"
-Write-Host "  SERVICE_URL                     =  (as stored in Secret Manager)"
+Write-Host ''
+Write-Host 'That is all - no application secrets needed in GitHub.' -ForegroundColor Gray
+Write-Host 'The workflow reads everything else from GCP Secret Manager at runtime.' -ForegroundColor Gray
 Write-Host ''
 Write-Host 'After adding those, trigger the GitHub Actions workflow.' -ForegroundColor Cyan
 Write-Host 'Once deployed, update the SERVICE_URL secret in Secret Manager' -ForegroundColor Cyan
