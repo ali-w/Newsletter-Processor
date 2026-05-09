@@ -7,8 +7,13 @@ import { logger } from '../logger';
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
+// Initialised once at module load; fallback:true uses REST instead of gRPC,
+// avoiding gRPC name-resolution timeouts in Cloud Run cold starts.
+const tasksClient = new CloudTasksClient({ fallback: true });
+
 app.post('/webhook/cloudmailin', async (req, res) => {
-  const secret = (req.headers['x-api-key'] as string | undefined) ?? (req.query?.secret as string | undefined);
+  const parsedUrl = new URL(req.url, 'https://localhost');
+  const secret = parsedUrl.searchParams.get('secret');
   if (secret !== config.RSS_SECRET) {
     logger.warn('Unauthorized attempt to post to ingest webhook');
     return res.status(401).json({ error: 'Unauthorized' });
@@ -23,8 +28,7 @@ app.post('/webhook/cloudmailin', async (req, res) => {
   }
 
   try {
-    const client = new CloudTasksClient();
-    const parent = client.queuePath(config.GCP_PROJECT, config.GCP_REGION, config.TASKS_QUEUE);
+    const parent = tasksClient.queuePath(config.GCP_PROJECT, config.GCP_REGION, config.TASKS_QUEUE);
 
     const task = {
       httpRequest: {
@@ -35,7 +39,7 @@ app.post('/webhook/cloudmailin', async (req, res) => {
       },
     };
 
-    const [response] = await client.createTask({ parent, task });
+    const [response] = await tasksClient.createTask({ parent, task });
     logger.info('Ingest task enqueued', { taskName: response.name });
   } catch (err) {
     logger.error('Failed to enqueue ingest task', { error: err instanceof Error ? err.message : String(err) });
