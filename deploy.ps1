@@ -20,9 +20,14 @@
   Switch. Pass on first run to enable APIs and create the Cloud Tasks queue.
   Secrets must already exist in Secret Manager before deploying.
 
+.PARAMETER Function
+  Deploy only the named function (reader-api, summarize, ingest-worker, ingest).
+  Skips the other functions. Build and staging always run.
+
 .EXAMPLE
   .\deploy.ps1 -ProjectId my-gcp-project -Setup -RunMigration
   .\deploy.ps1 -ProjectId my-gcp-project
+  .\deploy.ps1 -ProjectId my-gcp-project -Function ingest
 #>
 
 param(
