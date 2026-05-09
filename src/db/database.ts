@@ -13,6 +13,17 @@ export interface Article {
   summary: string;
   url: string;
   created_at?: string;
+  status?: 'unread' | 'read' | 'skipped';
+  rating?: number | null;
+  notes?: string;
+  updated_at?: string | null;
+  note_updated_at?: string | null;
+}
+
+export interface ArticlePatch {
+  status?: 'unread' | 'read' | 'skipped';
+  rating?: number | null;
+  notes?: string;
 }
 
 export interface Newsletter {
@@ -41,6 +52,23 @@ export async function initDb() {
       FOREIGN KEY (newsletter_id) REFERENCES newsletters (id)
     )
   `);
+
+  // Add reader annotation columns to existing tables (idempotent — SQLite has no ADD COLUMN IF NOT EXISTS)
+  const migrations = [
+    `ALTER TABLE articles ADD COLUMN status TEXT NOT NULL DEFAULT 'unread'`,
+    `ALTER TABLE articles ADD COLUMN rating INTEGER`,
+    `ALTER TABLE articles ADD COLUMN notes TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE articles ADD COLUMN updated_at DATETIME`,
+    `ALTER TABLE articles ADD COLUMN note_updated_at DATETIME`,
+  ];
+  for (const sql of migrations) {
+    try {
+      await db.execute(sql);
+    } catch (e: any) {
+      if (!String(e?.message).includes('duplicate column')) throw e;
+    }
+  }
+
   console.log('✅ Database tables initialized');
 }
 
@@ -62,14 +90,19 @@ export async function insertArticle(newsletterId: number, article: Article) {
 export async function getLatestArticles(limit: number) {
   const result = await db.execute({
     sql: `
-      SELECT 
-        a.id, 
-        a.newsletter_id, 
-        a.title, 
-        a.summary, 
-        a.url, 
+      SELECT
+        a.id,
+        a.newsletter_id,
+        a.title,
+        a.summary,
+        a.url,
         a.created_at as article_created_at,
-        n.name as newsletter_name, 
+        a.status,
+        a.rating,
+        a.notes,
+        a.updated_at,
+        a.note_updated_at,
+        n.name as newsletter_name,
         n.received_at
       FROM articles a
       JOIN newsletters n ON a.newsletter_id = n.id
@@ -98,4 +131,55 @@ export async function getArticleById(id: number): Promise<Article | null> {
     url: String(row.url),
     created_at: String(row.created_at),
   };
+}
+
+// Returns the updated_at timestamp on success, or null if the article was not found.
+export async function updateArticle(id: number, patch: ArticlePatch): Promise<string | null> {
+  const check = await db.execute({ sql: `SELECT id FROM articles WHERE id = ?`, args: [id] });
+  if (check.rows.length === 0) return null;
+
+  const now = new Date().toISOString();
+  const sets: string[] = ['updated_at = ?'];
+  const args: (string | number | null)[] = [now];
+
+  if (patch.status !== undefined) {
+    sets.push('status = ?');
+    args.push(patch.status);
+  }
+  if ('rating' in patch) {
+    sets.push('rating = ?');
+    args.push(patch.rating ?? null);
+  }
+  if (patch.notes !== undefined) {
+    sets.push('notes = ?');
+    args.push(patch.notes);
+    sets.push('note_updated_at = ?');
+    args.push(now);
+  }
+
+  args.push(id);
+  await db.execute({ sql: `UPDATE articles SET ${sets.join(', ')} WHERE id = ?`, args });
+  return now;
+}
+
+export async function updateArticles(
+  updates: Array<{ id: number } & ArticlePatch>
+): Promise<{ succeeded: number[]; failed: Array<{ id: number; error: string }> }> {
+  const succeeded: number[] = [];
+  const failed: Array<{ id: number; error: string }> = [];
+
+  for (const { id, ...patch } of updates) {
+    try {
+      const result = await updateArticle(id, patch);
+      if (result === null) {
+        failed.push({ id, error: 'Article not found' });
+      } else {
+        succeeded.push(id);
+      }
+    } catch {
+      failed.push({ id, error: 'Update failed' });
+    }
+  }
+
+  return { succeeded, failed };
 }

@@ -2,7 +2,7 @@ import express from 'express';
 import { MessageClient } from 'cloudmailin';
 import { config } from '../config';
 import { extractArticles, summarizeArticleFromUrl } from '../llm/parser';
-import { insertNewsletter, insertArticle, getLatestArticles, getArticleById } from '../db/database';
+import { insertNewsletter, insertArticle, getLatestArticles, getArticleById, updateArticle, updateArticles, ArticlePatch } from '../db/database';
 import { generateRssFeed } from '../rss/generator';
 
 export const app = express();
@@ -12,7 +12,7 @@ app.use(express.json({ limit: '5mb' }));
 // Global CORS Middleware
 app.use((req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type, secret');
   
   if (req.method === 'OPTIONS') {
@@ -143,6 +143,66 @@ app.post('/webhook/cloudmailin', async (req, res) => {
     console.error("❌ Error processing CloudMailin webhook:", err instanceof Error ? err.message : err);
     return res.status(500).json({ status: "error", message: "Internal server error during processing" });
   }
+});
+
+// Single article annotation update — PATCH /articles/:id?secret=<secret>
+app.patch('/articles/:id', async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== config.RSS_SECRET) return res.status(403).json({ error: 'Forbidden' });
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid article ID' });
+
+  const { status, rating, notes } = req.body;
+
+  if (status !== undefined && !['unread', 'read', 'skipped'].includes(status)) {
+    return res.status(400).json({ error: 'status must be "unread", "read", or "skipped"' });
+  }
+  if ('rating' in req.body && rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
+    return res.status(400).json({ error: 'rating must be an integer 1–5, or null' });
+  }
+  if (notes !== undefined && typeof notes !== 'string') {
+    return res.status(400).json({ error: 'notes must be a string' });
+  }
+
+  const patch: ArticlePatch = {};
+  if (status !== undefined) patch.status = status;
+  if ('rating' in req.body) patch.rating = rating ?? null;
+  if (notes !== undefined) patch.notes = notes;
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'No recognised fields to update' });
+  }
+
+  const updatedAt = await updateArticle(id, patch);
+  if (updatedAt === null) return res.status(404).json({ error: 'Article not found' });
+
+  return res.json({ id, updated_at: updatedAt });
+});
+
+// Batch annotation update (offline flush) — POST /articles/updates?secret=<secret>
+app.post('/articles/updates', async (req, res) => {
+  const { secret } = req.query;
+  if (secret !== config.RSS_SECRET) return res.status(403).json({ error: 'Forbidden' });
+
+  if (!Array.isArray(req.body)) return res.status(400).json({ error: 'Expected a JSON array' });
+
+  const updates: Array<{ id: number } & ArticlePatch> = [];
+
+  for (const item of req.body) {
+    const { id, status, rating, notes } = item;
+    if (!Number.isInteger(id) || id <= 0) continue;
+
+    const patch: ArticlePatch = {};
+    if (status !== undefined && ['unread', 'read', 'skipped'].includes(status)) patch.status = status;
+    if ('rating' in item) patch.rating = (Number.isInteger(rating) && rating >= 1 && rating <= 5) ? rating : null;
+    if (typeof notes === 'string') patch.notes = notes;
+
+    updates.push({ id, ...patch });
+  }
+
+  const result = await updateArticles(updates);
+  return res.json(result);
 });
 
 // Article Summarization Endpoint
