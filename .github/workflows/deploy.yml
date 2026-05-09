@@ -69,6 +69,7 @@ jobs:
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
             pkg.scripts = {};
+            pkg.main = 'deploy-index.js';
             fs.writeFileSync('deploy/dist/package.json', JSON.stringify(pkg, null, 2));
           "
           cp package-lock.json deploy/dist/package-lock.json
