@@ -1,6 +1,5 @@
 import RSS from 'rss';
 
-
 interface RssArticle {
   id: number;
   title: string;
@@ -10,7 +9,7 @@ interface RssArticle {
   newsletter_name: string;
 }
 
-export function generateRssFeed(articles: RssArticle[], baseUrl: string, rssSecret: string): string {
+export function generateRssFeed(articles: RssArticle[], baseUrl: string): string {
   const feed = new RSS({
     title: 'Newsletter Processor Feed',
     description: 'Articles extracted from email newsletters',
@@ -29,11 +28,8 @@ export function generateRssFeed(articles: RssArticle[], baseUrl: string, rssSecr
       `,
       url: article.url,
       guid: `article-${article.id}`,
-      date: article.received_at, // Use the newsletter received_at date
+      date: article.received_at,
       author: article.newsletter_name,
-      custom_elements: [
-        { comments: `${baseUrl}/summarize/${article.id}?secret=${rssSecret}` }
-      ]
     });
   }
 

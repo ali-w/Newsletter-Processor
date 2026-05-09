@@ -13,18 +13,17 @@ describe('RSS Generator', () => {
       }
     ];
 
-    const xml = generateRssFeed(articles, 'http://localhost:8080', 'test_secret_123');
+    const xml = generateRssFeed(articles, 'http://localhost:8080');
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(xml).toContain('<title><![CDATA[Breaking News]]></title>');
     expect(xml).toContain('<link>http://news.com/1</link>');
     expect(xml).toContain('Daily News');
     expect(xml).toContain('<strong>From:</strong> Daily News');
     expect(xml).toContain('<guid isPermaLink="false">article-123</guid>');
-    expect(xml).toContain('/summarize/123?secret=test_secret_123');
   });
 
   it('should handle empty articles list gracefully', () => {
-    const xml = generateRssFeed([], 'http://localhost:8080', 'test_secret_123');
+    const xml = generateRssFeed([], 'http://localhost:8080');
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(xml).not.toContain('<item>');
   });

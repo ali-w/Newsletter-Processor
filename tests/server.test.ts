@@ -59,7 +59,7 @@ describe('POST /webhook/cloudmailin', () => {
       .post(`/webhook/cloudmailin?secret=${SECRET}`)
       .send({ envelope: { from: 'sender@example.com' }, headers: {} })
       .expect(400);
-    expect(res.body.message).toMatch(/no content/i);
+    expect(res.body.error).toMatch(/no content/i);
   });
 
   it('extracts articles and stores them, returning 200 with the article count', async () => {
@@ -118,8 +118,8 @@ describe('PATCH /articles/:id', () => {
     (updateArticle as jest.Mock).mockResolvedValue('2026-05-09T12:00:00.000Z');
   });
 
-  it('returns 403 for a wrong secret', async () => {
-    await request(app).patch('/articles/1?secret=wrong').send({ status: 'read' }).expect(403);
+  it('returns 401 for a wrong secret', async () => {
+    await request(app).patch('/articles/1?secret=wrong').send({ status: 'read' }).expect(401);
   });
 
   it('returns 400 for a non-numeric article ID', async () => {
@@ -190,11 +190,11 @@ describe('POST /articles/updates', () => {
     (updateArticles as jest.Mock).mockResolvedValue({ succeeded: [], failed: [] });
   });
 
-  it('returns 403 for a wrong secret', async () => {
+  it('returns 401 for a wrong secret', async () => {
     await request(app)
       .post('/articles/updates?secret=wrong')
       .send([{ id: 1, status: 'read' }])
-      .expect(403);
+      .expect(401);
   });
 
   it('returns 400 when body is not an array', async () => {

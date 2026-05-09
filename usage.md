@@ -34,7 +34,7 @@ GET <BASE_URL>/articles?secret=<SECRET>&limit=10
 | Parameter | Type    | Default | Max | Description                     |
 |-----------|---------|---------|-----|---------------------------------|
 | `secret`  | string  | —       | —   | Required. API secret.           |
-| `limit`   | integer | 30      | 30  | Number of articles to return.   |
+| `limit`   | integer | 50      | 200 | Number of articles to return.   |
 
 **Response** `200 application/json` — array of article objects:
 

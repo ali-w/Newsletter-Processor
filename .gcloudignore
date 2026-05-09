@@ -1,0 +1,13 @@
+.gcloudignore
+.git
+.gitignore
+.env
+*.ts
+!deploy-index.ts
+src/
+tests/
+dist/
+tsconfig*.json
+jest.config.js
+architecture.md
+usage.md

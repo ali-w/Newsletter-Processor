@@ -1,5 +1,6 @@
 import { createClient } from '@libsql/client/web';
 import { config } from '../config';
+import { logger } from '../logger';
 
 export const db = createClient({
   url: config.TURSO_DATABASE_URL,
@@ -32,44 +33,10 @@ export interface Newsletter {
   received_at: string;
 }
 
+// initDb is a no-op at runtime — schema is applied by `npm run migrate` (src/db/migrate.ts)
+// before each deployment. Kept here so local `npm run dev` still has a hook to call.
 export async function initDb() {
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS newsletters (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      received_at DATETIME NOT NULL
-    )
-  `);
-
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS articles (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      newsletter_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      url TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (newsletter_id) REFERENCES newsletters (id)
-    )
-  `);
-
-  // Add reader annotation columns to existing tables (idempotent — SQLite has no ADD COLUMN IF NOT EXISTS)
-  const migrations = [
-    `ALTER TABLE articles ADD COLUMN status TEXT NOT NULL DEFAULT 'unread'`,
-    `ALTER TABLE articles ADD COLUMN rating INTEGER`,
-    `ALTER TABLE articles ADD COLUMN notes TEXT NOT NULL DEFAULT ''`,
-    `ALTER TABLE articles ADD COLUMN updated_at DATETIME`,
-    `ALTER TABLE articles ADD COLUMN note_updated_at DATETIME`,
-  ];
-  for (const sql of migrations) {
-    try {
-      await db.execute(sql);
-    } catch (e: any) {
-      if (!String(e?.message).includes('duplicate column')) throw e;
-    }
-  }
-
-  console.log('✅ Database tables initialized');
+  logger.info('Database ready');
 }
 
 export async function insertNewsletter(name: string, receivedAt: Date): Promise<number> {

@@ -1,0 +1,194 @@
+# Manual-only deployment to GCP Cloud Functions (gen2).
+# Trigger: Actions tab → Deploy to GCP → Run workflow.
+#
+# Required GitHub configuration before first run:
+#
+# Repository variables (Settings → Secrets and variables → Variables):
+#   GCP_PROJECT_ID    — GCP project ID
+#   GCP_REGION        — e.g. europe-west1  (default: europe-west1)
+#   TASKS_QUEUE       — Cloud Tasks queue  (default: newsletter-ingest)
+#   ARTICLES_MAX_LIMIT — article cap       (default: 200)
+#
+# Repository secrets (Settings → Secrets and variables → Secrets):
+#   GCP_WORKLOAD_IDENTITY_PROVIDER — Workload Identity Federation provider resource name
+#                                    e.g. projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+#   GCP_SERVICE_ACCOUNT            — Service account email used for deployment
+#                                    e.g. deploy-sa@my-project.iam.gserviceaccount.com
+#
+#   The following are only needed for the migration step (npm run migrate reads from env):
+#   GEMINI_API_KEY, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, RSS_SECRET, SERVICE_URL
+#
+# All other sensitive config (API keys, DB credentials) is read from GCP Secret Manager
+# at function runtime via --set-secrets. Those secrets must exist in Secret Manager
+# before running this workflow.
+#
+# Setting up Workload Identity Federation:
+#   https://github.com/google-github-actions/auth?tab=readme-ov-file#workload-identity-federation-through-a-service-account
+
+name: Deploy to GCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_migration:
+        description: 'Skip database migration'
+        type: boolean
+        default: false
+
+env:
+  GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION:  ${{ vars.GCP_REGION  || 'europe-west1' }}
+  TASKS_QUEUE: ${{ vars.TASKS_QUEUE || 'newsletter-ingest' }}
+  ARTICLES_MAX_LIMIT: ${{ vars.ARTICLES_MAX_LIMIT || '200' }}
+  # Secrets bound from GCP Secret Manager — identical for every function
+  SECRETS_BINDING: >-
+    CLOUDMAILIN_API_KEY=CLOUDMAILIN_API_KEY:latest,CLOUDMAILIN_USERNAME=CLOUDMAILIN_USERNAME:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,REVIEW_RECIPIENT_EMAIL=REVIEW_RECIPIENT_EMAIL:latest,RSS_SECRET=RSS_SECRET:latest,SERVICE_URL=SERVICE_URL:latest,TURSO_AUTH_TOKEN=TURSO_AUTH_TOKEN:latest,TURSO_DATABASE_URL=TURSO_DATABASE_URL:latest
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Cloud Functions
+        run: npm run build:functions
+
+      - name: Stage package manifests for gcloud upload
+        run: |
+          cp package.json      deploy/dist/package.json
+          cp package-lock.json deploy/dist/package-lock.json
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run database migration
+        if: ${{ !inputs.skip_migration }}
+        env:
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN:   ${{ secrets.TURSO_AUTH_TOKEN }}
+          RSS_SECRET:         ${{ secrets.RSS_SECRET }}
+          SERVICE_URL:        ${{ secrets.SERVICE_URL }}
+        run: npm run migrate
+
+      # Deploy reader-api and summarize in parallel (independent of each other)
+
+      - name: Deploy reader-api
+        run: |
+          gcloud functions deploy reader-api \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --runtime=nodejs22 \
+            --source=deploy/dist \
+            --entry-point=readerApi \
+            --trigger-http \
+            --allow-unauthenticated \
+            --timeout=60s \
+            --set-secrets="$SECRETS_BINDING" \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT"
+
+      - name: Deploy summarize
+        run: |
+          gcloud functions deploy summarize \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --runtime=nodejs22 \
+            --source=deploy/dist \
+            --entry-point=summarize \
+            --trigger-http \
+            --allow-unauthenticated \
+            --timeout=540s \
+            --set-secrets="$SECRETS_BINDING" \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT"
+
+      # ingest-worker must deploy before ingest so we can capture its URL
+
+      - name: Deploy ingest-worker
+        run: |
+          gcloud functions deploy ingest-worker \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --runtime=nodejs22 \
+            --source=deploy/dist \
+            --entry-point=ingestWorker \
+            --trigger-http \
+            --allow-unauthenticated \
+            --timeout=540s \
+            --set-secrets="$SECRETS_BINDING" \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT"
+
+      - name: Get ingest-worker URL
+        id: ingest_worker
+        run: |
+          URL=$(gcloud functions describe ingest-worker \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(serviceConfig.uri)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy ingest
+        run: |
+          gcloud functions deploy ingest \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --runtime=nodejs22 \
+            --source=deploy/dist \
+            --entry-point=ingest \
+            --trigger-http \
+            --allow-unauthenticated \
+            --timeout=30s \
+            --set-secrets="$SECRETS_BINDING" \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,INGEST_WORKER_URL=${{ steps.ingest_worker.outputs.url }}"
+
+      - name: Write job summary
+        run: |
+          READER_API_URL=$(gcloud functions describe reader-api \
+            --gen2 --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(serviceConfig.uri)')
+          SUMMARIZE_URL=$(gcloud functions describe summarize \
+            --gen2 --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(serviceConfig.uri)')
+          INGEST_URL=$(gcloud functions describe ingest \
+            --gen2 --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(serviceConfig.uri)')
+          INGEST_WORKER_URL="${{ steps.ingest_worker.outputs.url }}"
+
+          {
+            echo "## Deployment complete"
+            echo ""
+            echo "| Function | URL |"
+            echo "|---|---|"
+            echo "| reader-api | $READER_API_URL |"
+            echo "| summarize | $SUMMARIZE_URL |"
+            echo "| ingest | $INGEST_URL |"
+            echo "| ingest-worker | $INGEST_WORKER_URL |"
+            echo ""
+            echo "**CloudMailin webhook URL:** \`$INGEST_URL/webhook/cloudmailin\`"
+          } >> "$GITHUB_STEP_SUMMARY"

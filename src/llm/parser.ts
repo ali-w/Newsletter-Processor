@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { config } from '../config';
+import { logger } from '../logger';
 import { Article } from '../db/database';
 
 const ai = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });
@@ -65,7 +66,7 @@ export async function extractArticles(newsletterContent: string): Promise<Articl
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      console.log(`🤖 LLM extraction attempt ${attempt}/${MAX_RETRIES}...`);
+      logger.info(`LLM extraction attempt ${attempt}/${MAX_RETRIES}`);
 
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
@@ -79,12 +80,12 @@ export async function extractArticles(newsletterContent: string): Promise<Articl
 
       const textOutput = response.text;
       if (!textOutput) {
-        console.warn("⚠️  No text returned from Gemini — treating as empty result.");
+        logger.warn('No text returned from Gemini — treating as empty result');
         return [];
       }
 
       const articles: Article[] = JSON.parse(textOutput);
-      console.log(`✅ LLM extraction succeeded on attempt ${attempt}/${MAX_RETRIES}. Extracted ${articles.length} articles.`);
+      logger.info(`LLM extraction succeeded on attempt ${attempt}/${MAX_RETRIES}`, { articleCount: articles.length });
       return articles;
 
     } catch (error) {
@@ -96,17 +97,15 @@ export async function extractArticles(newsletterContent: string): Promise<Articl
         const jitter = Math.random() * 1000;
         const waitMs = Math.min(baseDelay + jitter, MAX_WAIT_MS);
 
-        console.error(
-          `❌ LLM extraction failed on attempt ${attempt}/${MAX_RETRIES}. ` +
-          `Error: ${error instanceof Error ? error.message : String(error)}. ` +
-          `Retrying in ${(waitMs / 1000).toFixed(1)}s...`
-        );
+        logger.error(`LLM extraction failed on attempt ${attempt}/${MAX_RETRIES}`, {
+          error: error instanceof Error ? error.message : String(error),
+          retryInMs: waitMs,
+        });
         await sleep(waitMs);
       } else {
-        console.error(
-          `❌ LLM extraction failed on final attempt ${attempt}/${MAX_RETRIES}. ` +
-          `Error: ${error instanceof Error ? error.message : String(error)}. No more retries.`
-        );
+        logger.error(`LLM extraction failed on final attempt ${attempt}/${MAX_RETRIES}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
@@ -120,7 +119,7 @@ export async function extractArticles(newsletterContent: string): Promise<Articl
  * an Agility Leads / HR / Operating Model leadership audience.
  */
 export async function summarizeArticleFromUrl(url: string, title: string): Promise<string> {
-  console.log(`🌐 Fetching article content from: ${url}`);
+  logger.info('Fetching article content', { url });
 
   let articleContent: string;
   try {
@@ -185,7 +184,7 @@ Article content:
 ${articleContent}
 `;
 
-  console.log(`🤖 Requesting executive summary from Gemini for: "${title}"`);
+  logger.info('Requesting executive summary from Gemini', { title });
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -201,20 +200,22 @@ ${articleContent}
       const text = response.text;
       if (!text) throw new Error('Empty response from Gemini');
 
-      console.log(`✅ Summary generated on attempt ${attempt}/${MAX_RETRIES}.`);
+      logger.info(`Summary generated on attempt ${attempt}/${MAX_RETRIES}`);
       return text.trim();
 
     } catch (error) {
       lastError = error;
       if (attempt < MAX_RETRIES) {
         const waitMs = Math.min(Math.pow(2, attempt) * 1000 + Math.random() * 1000, MAX_WAIT_MS);
-        console.error(
-          `❌ Summary attempt ${attempt}/${MAX_RETRIES} failed: ${error instanceof Error ? error.message : String(error)}. ` +
-          `Retrying in ${(waitMs / 1000).toFixed(1)}s...`
-        );
+        logger.error(`Summary attempt ${attempt}/${MAX_RETRIES} failed`, {
+          error: error instanceof Error ? error.message : String(error),
+          retryInMs: waitMs,
+        });
         await sleep(waitMs);
       } else {
-        console.error(`❌ Summary failed on final attempt ${attempt}/${MAX_RETRIES}: ${error instanceof Error ? error.message : String(error)}.`);
+        logger.error(`Summary failed on final attempt ${attempt}/${MAX_RETRIES}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }

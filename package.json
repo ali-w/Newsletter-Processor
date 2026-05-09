@@ -1,16 +1,20 @@
 {
   "name": "newsletter-processor",
   "version": "1.0.0",
-  "description": "Backend service for processing email newsletters via POP3, LLM extraction, and RSS feed generation",
+  "description": "Backend service for processing email newsletters via CloudMailin webhook, LLM extraction, and RSS/JSON feed generation",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "build:functions": "tsc -p tsconfig.functions.json",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
+    "migrate": "ts-node src/db/migrate.ts",
     "test": "jest"
   },
   "dependencies": {
-    "@google/genai": "latest",
+    "@google-cloud/functions-framework": "^5.0.2",
+    "@google-cloud/tasks": "^6.2.2",
+    "@google/genai": "1.51.0",
     "@libsql/client": "^0.14.0",
     "cloudmailin": "^0.3.1",
     "dotenv": "^16.4.7",
