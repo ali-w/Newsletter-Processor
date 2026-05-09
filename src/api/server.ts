@@ -9,6 +9,18 @@ export const app = express();
 
 app.use(express.json({ limit: '5mb' }));
 
+// Global CORS Middleware
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, secret');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 // RSS Feed Endpoint (Protected by secret)
 app.get('/rss', async (req, res) => {
   try {
@@ -26,8 +38,6 @@ app.get('/rss', async (req, res) => {
     const xml = generateRssFeed(articles as any[], config.SERVICE_URL, config.RSS_SECRET);
 
     res.set('Content-Type', 'application/rss+xml');
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET');
     res.send(xml);
   } catch (err) {
     console.error("❌ Error generating RSS feed:", err);
@@ -50,8 +60,6 @@ app.get('/articles', async (req, res) => {
 
     const articles = await getLatestArticles(safeLimit);
     
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET');
     res.json(articles);
   } catch (err) {
     console.error("❌ Error fetching articles JSON:", err);
@@ -165,8 +173,6 @@ app.get('/summarize/:id', async (req, res) => {
     const summary = await summarizeArticleFromUrl(article.url, article.title);
 
     res.set('Content-Type', 'text/plain; charset=utf-8');
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET');
     return res.status(200).send(summary);
 
   } catch (err) {
