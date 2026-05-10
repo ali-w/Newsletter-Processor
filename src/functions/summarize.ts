@@ -2,7 +2,7 @@ import express from 'express';
 import { HttpFunction } from '@google-cloud/functions-framework';
 import { config } from '../config';
 import { logger } from '../logger';
-import { getArticleById, getDistinctTags, updateArticle, ArticlePatch } from '../db/database';
+import { getArticleById, getDistinctTags, updateArticle, setAiSummary, setArticleSummary, setCachedContent } from '../db/database';
 import { summarizeArticleFromUrl, describeArticleFromUrl, fetchRawHtml } from '../llm/parser';
 import { uploadHtml, getFileStream } from '../storage/gcs';
 import { JSDOM } from 'jsdom';
@@ -26,6 +26,7 @@ app.get('/articles/:id/summary', async (req, res) => {
     logger.info('Generating summary', { articleId: id, title: article.title });
 
     const summary = await summarizeArticleFromUrl(article.url, article.title, article.notes);
+    await setAiSummary(id, summary);
     res.set('Content-Type', 'text/plain; charset=utf-8');
     return res.status(200).send(summary);
 
@@ -50,11 +51,10 @@ app.get('/articles/:id/describe', async (req, res) => {
 
     const result = await describeArticleFromUrl(article.url, article.title, existingTags);
 
-    const patch: ArticlePatch = { summary: result.summary };
+    await setArticleSummary(id, result.summary);
     if (!article.tags || article.tags.length === 0) {
-      patch.tags = [result.suggestedTag];
+      await updateArticle(id, { tags: [result.suggestedTag] });
     }
-    await updateArticle(id, patch);
 
     return res.status(200).json(result);
   } catch (err) {
@@ -95,8 +95,7 @@ app.post('/articles/:id/cache', async (req, res) => {
 
     const gsUri = await uploadHtml(id, cleanHtml);
     const now = new Date().toISOString();
-    const patch: ArticlePatch = { cached_content_url: gsUri, cached_at: now };
-    await updateArticle(id, patch);
+    await setCachedContent(id, gsUri, now);
 
     logger.info('Article cached', { articleId: id, gsUri });
     return res.status(200).json({ cached_content_url: gsUri, cached_at: now });

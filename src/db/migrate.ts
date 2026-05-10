@@ -39,6 +39,7 @@ async function migrate() {
     `ALTER TABLE articles ADD COLUMN saved INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE articles ADD COLUMN cached_content_url TEXT`,
     `ALTER TABLE articles ADD COLUMN cached_at DATETIME`,
+    `ALTER TABLE articles ADD COLUMN ai_summary TEXT`,
   ];
   for (const sql of alterations) {
     try {

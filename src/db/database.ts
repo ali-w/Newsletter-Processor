@@ -24,6 +24,7 @@ export interface Article {
   saved?: boolean;
   cached_content_url?: string | null;
   cached_at?: string | null;
+  ai_summary?: string | null;
 }
 
 export interface ArticlePatch {
@@ -32,9 +33,6 @@ export interface ArticlePatch {
   notes?: string;
   tags?: string[];
   saved?: boolean;
-  summary?: string;
-  cached_content_url?: string | null;
-  cached_at?: string | null;
 }
 
 export interface Newsletter {
@@ -88,6 +86,7 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
         a.saved,
         a.cached_content_url,
         a.cached_at,
+        a.ai_summary,
         n.name as newsletter_name,
         n.received_at
       FROM articles a
@@ -107,7 +106,7 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
 
 export async function getArticleById(id: number): Promise<Article | null> {
   const result = await db.execute({
-    sql: `SELECT id, newsletter_id, title, summary, url, created_at, notes, tags, content_type, cached_content_url, cached_at FROM articles WHERE id = ?`,
+    sql: `SELECT id, newsletter_id, title, summary, url, created_at, notes, tags, content_type, cached_content_url, cached_at, ai_summary FROM articles WHERE id = ?`,
     args: [id]
   });
 
@@ -126,6 +125,7 @@ export async function getArticleById(id: number): Promise<Article | null> {
     content_type: row.content_type != null ? String(row.content_type) : undefined,
     cached_content_url: row.cached_content_url != null ? String(row.cached_content_url) : null,
     cached_at: row.cached_at != null ? String(row.cached_at) : null,
+    ai_summary: row.ai_summary != null ? String(row.ai_summary) : null,
   };
 }
 
@@ -160,19 +160,6 @@ export async function updateArticle(id: number, patch: ArticlePatch): Promise<st
     sets.push('saved = ?');
     args.push(patch.saved ? 1 : 0);
   }
-  if (patch.summary !== undefined) {
-    sets.push('summary = ?');
-    args.push(patch.summary);
-  }
-  if ('cached_content_url' in patch) {
-    sets.push('cached_content_url = ?');
-    args.push(patch.cached_content_url ?? null);
-  }
-  if ('cached_at' in patch) {
-    sets.push('cached_at = ?');
-    args.push(patch.cached_at ?? null);
-  }
-
   args.push(id);
   await db.execute({ sql: `UPDATE articles SET ${sets.join(', ')} WHERE id = ?`, args });
   return now;
@@ -242,6 +229,27 @@ export async function getDistinctTags(): Promise<string[]> {
     } catch { /* skip malformed */ }
   }
   return [...seen].sort();
+}
+
+export async function setAiSummary(id: number, aiSummary: string): Promise<void> {
+  await db.execute({
+    sql: `UPDATE articles SET ai_summary = ?, updated_at = ? WHERE id = ?`,
+    args: [aiSummary, new Date().toISOString(), id],
+  });
+}
+
+export async function setArticleSummary(id: number, summary: string): Promise<void> {
+  await db.execute({
+    sql: `UPDATE articles SET summary = ?, updated_at = ? WHERE id = ?`,
+    args: [summary, new Date().toISOString(), id],
+  });
+}
+
+export async function setCachedContent(id: number, url: string, cachedAt: string): Promise<void> {
+  await db.execute({
+    sql: `UPDATE articles SET cached_content_url = ?, cached_at = ?, updated_at = ? WHERE id = ?`,
+    args: [url, cachedAt, new Date().toISOString(), id],
+  });
 }
 
 export async function updateArticles(
