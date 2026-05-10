@@ -31,10 +31,9 @@ on:
 
 env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
-  GCP_REGION:  ${{ vars.GCP_REGION  || 'europe-west1' }}
-  TASKS_QUEUE: ${{ vars.TASKS_QUEUE || 'newsletter-ingest' }}
-  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'gen-lang-client-0725921603-article-cache' }}
-   
+  GCP_REGION:  ${{ vars.GCP_REGION }}
+  TASKS_QUEUE: ${{ vars.TASKS_QUEUE }}
+  GCS_BUCKET: ${{ vars.GCS_BUCKET }}
   ARTICLES_MAX_LIMIT: ${{ vars.ARTICLES_MAX_LIMIT || '200' }}
   # Secrets bound from GCP Secret Manager — identical for every function
   SECRETS_BINDING: >-
@@ -75,6 +74,9 @@ jobs:
             fs.writeFileSync('deploy/dist/package.json', JSON.stringify(pkg, null, 2));
           "
           cp package-lock.json deploy/dist/package-lock.json
+
+      - name: Sanitize env vars
+        run: echo "GCS_BUCKET=$(printf '%s' "$GCS_BUCKET" | tr -d '\r')" >> "$GITHUB_ENV"
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
