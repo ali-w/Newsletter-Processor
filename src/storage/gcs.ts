@@ -52,3 +52,8 @@ export async function pdfExists(articleId: number): Promise<boolean> {
 export async function deletePdf(articleId: number): Promise<void> {
   await getPdfBucket().file(`${articleId}.pdf`).delete({ ignoreNotFound: true });
 }
+
+export async function downloadPdf(articleId: number): Promise<Buffer> {
+  const [bytes] = await getPdfBucket().file(`${articleId}.pdf`).download();
+  return bytes;
+}

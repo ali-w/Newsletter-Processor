@@ -1,16 +1,18 @@
 # setup-gcp-pdf.ps1
 #
-# Creates and configures GCP resources needed for PDF upload support.
+# Creates and configures GCP resources needed for PDF upload support,
+# then verifies all Secret Manager secrets and prints the full list of
+# required GitHub Actions repository variables.
+#
 # Run once before deploying the updated Cloud Functions.
 #
 # Prerequisites:
 #   - gcloud CLI installed and authenticated (gcloud auth login)
 #   - GCP_PROJECT_ID environment variable set, OR pass -Project parameter
-#   - Existing Cloud Functions service account must already exist
 #
 # Usage:
 #   .\scripts\setup-gcp-pdf.ps1
-#   .\scripts\setup-gcp-pdf.ps1 -Project my-project-id -Region europe-west1
+#   .\scripts\setup-gcp-pdf.ps1 -Project my-project-id -Region europe-west1 -BucketName my-pdfs
 
 param(
     [string]$Project    = $env:GCP_PROJECT_ID,
@@ -41,7 +43,7 @@ Write-Host ""
 # 1. Discover the Cloud Functions service account
 # ---------------------------------------------------------------------------
 
-Write-Host "[1/5] Discovering Cloud Functions service account..." -ForegroundColor Yellow
+Write-Host "[1/6] Discovering Cloud Functions service account..." -ForegroundColor Yellow
 
 $ProjectNumber = gcloud projects describe $Project --format='value(projectNumber)'
 $ServiceAccount = "$ProjectNumber-compute@developer.gserviceaccount.com"
@@ -52,7 +54,7 @@ Write-Host "      Service account: $ServiceAccount"
 # 2. Create the PDF bucket
 # ---------------------------------------------------------------------------
 
-Write-Host "[2/5] Creating GCS bucket gs://$BucketName ..." -ForegroundColor Yellow
+Write-Host "[2/6] Creating GCS bucket gs://$BucketName ..." -ForegroundColor Yellow
 
 $BucketExists = gcloud storage buckets list --filter="name=$BucketName" --project=$Project --format='value(name)'
 if ($BucketExists) {
@@ -70,7 +72,7 @@ if ($BucketExists) {
 # 3. Grant the service account access to the PDF bucket
 # ---------------------------------------------------------------------------
 
-Write-Host "[3/5] Granting bucket IAM roles to service account..." -ForegroundColor Yellow
+Write-Host "[3/6] Granting bucket IAM roles to service account..." -ForegroundColor Yellow
 
 gcloud storage buckets add-iam-policy-binding "gs://$BucketName" `
     --member="serviceAccount:$ServiceAccount" `
@@ -83,14 +85,10 @@ Write-Host "      roles/storage.objectAdmin granted on $BucketName." -Foreground
 # 4. Grant signBlob permission for signed URL generation
 # ---------------------------------------------------------------------------
 #
-# Signed URL v4 generation requires the service account to call
-# iam.serviceAccounts.signBlob on itself, satisfied by granting
-# roles/iam.serviceAccountTokenCreator on the SA itself.
-#
-# Without this, getSignedUrl() throws:
-#   "Could not load the default credentials" or "Failed to sign data"
+# Signed URL v4 requires the service account to sign blobs on itself.
+# Without this, getSignedUrl() throws "Failed to sign data".
 
-Write-Host "[4/5] Granting Service Account Token Creator (for signed URLs)..." -ForegroundColor Yellow
+Write-Host "[4/6] Granting Service Account Token Creator (for signed URLs)..." -ForegroundColor Yellow
 
 gcloud iam service-accounts add-iam-policy-binding $ServiceAccount `
     --project=$Project `
@@ -100,43 +98,100 @@ gcloud iam service-accounts add-iam-policy-binding $ServiceAccount `
 Write-Host "      roles/iam.serviceAccountTokenCreator granted on $ServiceAccount." -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 5. Reminder: add GitHub Actions repository variable
+# 5. Verify Secret Manager secrets
 # ---------------------------------------------------------------------------
 #
-# GCS_PDF_BUCKET is not sensitive so it is passed as --set-env-vars in
-# deploy.yml rather than as a Secret Manager secret. Add it manually:
-#
-#   GitHub -> Settings -> Secrets and variables -> Variables -> New repository variable
-#   Name:  GCS_PDF_BUCKET
-#   Value: research-reader-pdfs
+# These secrets must exist in Secret Manager before deployment.
+# Sensitive values (API keys, tokens) are never stored in GitHub.
 
-Write-Host "[5/5] GitHub Actions variable reminder..." -ForegroundColor Yellow
+Write-Host "[5/6] Checking Secret Manager secrets..." -ForegroundColor Yellow
+
+$RequiredSecrets = @(
+    'CLOUDMAILIN_API_KEY',
+    'CLOUDMAILIN_USERNAME',
+    'GEMINI_API_KEY',
+    'REVIEW_RECIPIENT_EMAIL',
+    'RSS_SECRET',
+    'SERVICE_URL',
+    'TURSO_AUTH_TOKEN',
+    'TURSO_DATABASE_URL'
+)
+
+$MissingSecrets = @()
+foreach ($Secret in $RequiredSecrets) {
+    $Exists = gcloud secrets describe $Secret --project=$Project --format='value(name)' 2>$null
+    if ($Exists) {
+        Write-Host "      [OK]      $Secret" -ForegroundColor Green
+    } else {
+        Write-Host "      [MISSING] $Secret" -ForegroundColor Red
+        $MissingSecrets += $Secret
+    }
+}
+
+if ($MissingSecrets.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  Create missing secrets with:" -ForegroundColor Yellow
+    foreach ($Secret in $MissingSecrets) {
+        Write-Host "    gcloud secrets create $Secret --project=$Project --replication-policy=automatic" -ForegroundColor Gray
+        Write-Host "    echo -n 'VALUE' | gcloud secrets versions add $Secret --data-file=- --project=$Project" -ForegroundColor Gray
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 6. GitHub Actions repository variables checklist
+# ---------------------------------------------------------------------------
+#
+# These are non-sensitive and set as repository variables (not secrets).
+# GitHub -> Settings -> Secrets and variables -> Variables
+
+Write-Host "[6/6] GitHub Actions repository variables checklist..." -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Add the following repository variable in GitHub:" -ForegroundColor White
-Write-Host "  Settings -> Secrets and variables -> Variables -> New repository variable" -ForegroundColor Gray
+Write-Host "  Set the following repository variables in GitHub:" -ForegroundColor White
+Write-Host "  Settings -> Secrets and variables -> Variables" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  Name  : GCS_PDF_BUCKET" -ForegroundColor Cyan
-Write-Host "  Value : $BucketName" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  Optional model overrides (defaults to gemini-2.5-flash-lite if omitted):" -ForegroundColor Gray
-Write-Host "  Name  : PDF_MODEL_TYPED       Value : gemini-2.5-flash-lite" -ForegroundColor Gray
-Write-Host "  Name  : PDF_MODEL_HANDWRITTEN Value : gemini-2.5-flash-lite" -ForegroundColor Gray
+
+$Variables = @(
+    @{ Name = 'GCP_PROJECT_ID';        Value = $Project;       Note = 'Required' },
+    @{ Name = 'GCP_REGION';            Value = $Region;        Note = 'Required' },
+    @{ Name = 'TASKS_QUEUE';           Value = 'newsletter-ingest'; Note = 'Required - Cloud Tasks queue name' },
+    @{ Name = 'GCS_BUCKET';            Value = '<html-cache-bucket-name>'; Note = 'Required - bucket for cached article HTML' },
+    @{ Name = 'GCS_PDF_BUCKET';        Value = $BucketName;    Note = 'Required - bucket for PDF uploads (just created)' },
+    @{ Name = 'ARTICLES_MAX_LIMIT';    Value = '200';          Note = 'Optional - default 200' },
+    @{ Name = 'PDF_MODEL_TYPED';       Value = 'gemini-2.5-flash-lite'; Note = 'Optional - Gemini model for typed PDFs' },
+    @{ Name = 'PDF_MODEL_HANDWRITTEN'; Value = 'gemini-2.5-flash-lite'; Note = 'Optional - Gemini model for handwritten PDFs' }
+)
+
+foreach ($Var in $Variables) {
+    Write-Host ("  {0,-26} = {1}" -f $Var.Name, $Var.Value) -ForegroundColor Cyan
+    Write-Host ("  {0,-26}   ({1})" -f '', $Var.Note) -ForegroundColor Gray
+    Write-Host ""
+}
+
+Write-Host "  Repository secret (Settings -> Secrets and variables -> Secrets):" -ForegroundColor White
+Write-Host "  GCP_SA_KEY  = <service account key JSON>" -ForegroundColor Cyan
+Write-Host "  (generate: gcloud iam service-accounts keys create key.json --iam-account=$ServiceAccount)" -ForegroundColor Gray
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
 Write-Host ""
-Write-Host "=== Setup complete ===" -ForegroundColor Green
+if ($MissingSecrets.Count -gt 0) {
+    Write-Host "=== Setup complete with warnings ===" -ForegroundColor Yellow
+    Write-Host "  $($MissingSecrets.Count) Secret Manager secret(s) still need to be created (see above)." -ForegroundColor Yellow
+} else {
+    Write-Host "=== Setup complete ===" -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  1. Add GCS_PDF_BUCKET as a GitHub Actions repository variable (see above)"
-Write-Host "  2. Run the database migration:"
+Write-Host "  1. Create any missing Secret Manager secrets listed above"
+Write-Host "  2. Set all GitHub Actions repository variables listed above"
+Write-Host "  3. Run the database migration:"
 Write-Host "     GitHub Actions -> Deploy to GCP -> Run workflow -> skip_migration: false"
-Write-Host "  3. Deploy both Cloud Functions via GitHub Actions"
+Write-Host "  4. Deploy all Cloud Functions via GitHub Actions"
 Write-Host ""
 Write-Host "Smoke test after deployment:"
 Write-Host "  POST /articles/upload-pdf  -> get { id, upload_url, gcs_uri }"
-Write-Host "  PUT <upload_url> -H 'Content-Type: application/pdf' --data-binary @file.pdf"
+Write-Host "  PUT <upload_url> with Content-Type: application/pdf"
 Write-Host "  POST /articles/{id}/confirm-upload  -> { ok: true }"
 Write-Host "  GET  /articles/{id}/pdf?secret=<key>  -> 302 redirect to signed URL"
