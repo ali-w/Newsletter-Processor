@@ -10,13 +10,12 @@ function getBucket() {
 
 export async function uploadHtml(articleId: number, html: string): Promise<string> {
   const bucket = getBucket();
-  const file = bucket.file(`articles/${articleId}/content.html`);
-  await file.save(html, { contentType: 'text/html; charset=utf-8', resumable: false });
-  return `gs://${config.GCS_BUCKET}/articles/${articleId}/content.html`;
+  const path = `articles/${articleId}/content.html`;
+  await bucket.file(path).save(html, { contentType: 'text/html; charset=utf-8', resumable: false });
+  return path;
 }
 
-export function getFileStream(gsUri: string) {
+export function getFileStream(gcsPath: string) {
   const bucket = getBucket();
-  const objectPath = gsUri.replace(`gs://${config.GCS_BUCKET}/`, '');
-  return bucket.file(objectPath).createReadStream();
+  return bucket.file(gcsPath).createReadStream();
 }

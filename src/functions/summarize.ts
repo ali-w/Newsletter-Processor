@@ -101,12 +101,12 @@ app.post('/articles/:id/cache', async (req, res) => {
 <style>body{max-width:800px;margin:2rem auto;font-family:Georgia,serif;line-height:1.6;padding:0 1rem}h1{font-size:1.5rem}</style>
 </head><body><h1>${parsed.title}</h1>${parsed.content}</body></html>`;
 
-    const gsUri = await uploadHtml(id, cleanHtml);
+    const gcsPath = await uploadHtml(id, cleanHtml);
     const now = new Date().toISOString();
-    await setCachedContent(id, gsUri, now);
+    await setCachedContent(id, gcsPath, now);
 
-    logger.info('Article cached', { articleId: id, gsUri });
-    return res.status(200).json({ cached_content_url: gsUri, cached_at: now });
+    logger.info('Article cached', { articleId: id, gcsPath });
+    return res.status(200).json({ cached_content_url: gcsPath, cached_at: now });
   } catch (err) {
     logger.error('Error caching article', { error: err instanceof Error ? err.message : String(err) });
     return res.status(500).json({ error: 'Failed to cache article' });
@@ -129,7 +129,7 @@ app.get('/articles/:id/cached-content', async (req, res) => {
     const stream = getFileStream(article.cached_content_url);
     res.set('Content-Type', 'text/html; charset=utf-8');
     stream.on('error', (err) => {
-      logger.error('GCS stream error', { error: err.message, gsUri: article.cached_content_url });
+      logger.error('GCS stream error', { error: err.message, gcsPath: article.cached_content_url });
       if (!res.headersSent) res.status(500).json({ error: 'Failed to read cached content' });
     });
     stream.pipe(res);
