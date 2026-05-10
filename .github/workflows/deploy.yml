@@ -35,8 +35,6 @@ env:
   TASKS_QUEUE: ${{ vars.TASKS_QUEUE || 'newsletter-ingest' }}
   GCS_BUCKET: ${{ vars.GCS_BUCKET || 'gen-lang-client-0725921603-article-cache' }}
    
-    --set-env-vars==YOUR_BUCKET_NAME
-
   ARTICLES_MAX_LIMIT: ${{ vars.ARTICLES_MAX_LIMIT || '200' }}
   # Secrets bound from GCP Secret Manager — identical for every function
   SECRETS_BINDING: >-
