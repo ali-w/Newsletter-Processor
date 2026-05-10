@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
 
-dotenv.config();
+if (process.env.NODE_ENV !== 'test') dotenv.config();
 
 const envSchema = z.object({
   // LLM Configuration

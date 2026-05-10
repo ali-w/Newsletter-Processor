@@ -7,3 +7,4 @@ process.env.GCP_PROJECT = 'test-project';
 process.env.GCP_REGION = 'europe-west1';
 process.env.TASKS_QUEUE = 'newsletter-ingest';
 process.env.INGEST_WORKER_URL = 'http://localhost:8080/worker';
+process.env.ARTICLES_MAX_LIMIT = '200';

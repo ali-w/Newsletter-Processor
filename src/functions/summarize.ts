@@ -10,6 +10,14 @@ import { Readability } from '@mozilla/readability';
 
 const app = express();
 
+app.use((_req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+  next();
+});
+app.options('*', (_req, res) => res.status(204).end());
+
 app.get('/articles/:id/summary', async (req, res) => {
   try {
     const secret = req.headers['x-api-key'] as string | undefined;
@@ -131,13 +139,4 @@ app.get('/articles/:id/cached-content', async (req, res) => {
   }
 });
 
-export const summarize: HttpFunction = (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-  app(req, res);
-};
+export const summarize: HttpFunction = (req, res) => app(req, res);

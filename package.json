@@ -9,7 +9,9 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "migrate": "ts-node src/db/migrate.ts",
-    "test": "jest"
+    "test": "jest --config jest.config.js",
+    "test:functions": "jest --config jest.functions.config.js",
+    "test:all": "npm test && npm run test:functions"
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^5.0.2",
@@ -17,7 +19,7 @@
     "@google-cloud/tasks": "^6.2.2",
     "@google/genai": "1.51.0",
     "@libsql/client": "^0.14.0",
-    "@mozilla/readability": "^0.5.0",
+    "@mozilla/readability": "^0.6.0",
     "cloudmailin": "^0.3.1",
     "cors": "^2.8.6",
     "dotenv": "^16.4.7",

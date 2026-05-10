@@ -27,6 +27,12 @@ export interface Article {
   ai_summary?: string | null;
 }
 
+export interface ArticleRow extends Omit<Article, 'id'> {
+  id: number;
+  newsletter_name: string;
+  received_at: string;
+}
+
 export interface ArticlePatch {
   status?: 'unread' | 'read' | 'skipped';
   rating?: number | null;
@@ -98,10 +104,10 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
     args
   });
   return result.rows.map(row => ({
-    ...row,
+    ...(row as Record<string, unknown>),
     tags: JSON.parse(String(row.tags ?? '[]')),
     saved: Boolean(row.saved),
-  }));
+  })) as ArticleRow[];
 }
 
 export async function getArticleById(id: number): Promise<Article | null> {

@@ -1,7 +1,8 @@
 import request from 'supertest';
 import { app } from '../src/api/server';
-import { extractArticles } from '../src/llm/parser';
-import { insertNewsletter, insertArticle, updateArticle, updateArticles } from '../src/db/database';
+import { extractArticles, summarizeArticleFromUrl } from '../src/llm/parser';
+import { insertNewsletter, insertArticle, getLatestArticles, getArticleById, updateArticle, updateArticles } from '../src/db/database';
+import { generateRssFeed } from '../src/rss/generator';
 
 // Mock the entire database module — no libsql client needed in server tests
 jest.mock('../src/db/database', () => ({
@@ -16,6 +17,10 @@ jest.mock('../src/db/database', () => ({
 jest.mock('../src/llm/parser', () => ({
   extractArticles: jest.fn(),
   summarizeArticleFromUrl: jest.fn(),
+}));
+
+jest.mock('../src/rss/generator', () => ({
+  generateRssFeed: jest.fn().mockReturnValue('<?xml version="1.0"?><rss version="2.0"></rss>'),
 }));
 
 // Cloudmailin is used when forwarding emails with no articles for manual review
@@ -240,5 +245,132 @@ describe('POST /articles/updates', () => {
       .expect(200);
     // rating 99 is out of range — coerced to null in the batch endpoint
     expect(updateArticles).toHaveBeenCalledWith([{ id: 1, rating: null, notes: 'My note' }]);
+  });
+
+  it('accepts X-Api-Key header auth', async () => {
+    await request(app)
+      .post('/articles/updates')
+      .set('X-Api-Key', SECRET)
+      .send([{ id: 1, status: 'read' }])
+      .expect(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /articles  — JSON article list
+// ---------------------------------------------------------------------------
+
+describe('GET /articles', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (getLatestArticles as jest.Mock).mockResolvedValue([
+      { id: 1, title: 'Test Article', summary: 'A summary', url: 'http://example.com', status: 'unread' },
+    ]);
+  });
+
+  it('returns 401 for a wrong secret', async () => {
+    await request(app).get('/articles?secret=wrong').expect(401);
+  });
+
+  it('returns 200 with an articles array via query param', async () => {
+    const res = await request(app).get(`/articles?secret=${SECRET}`).expect(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body[0].title).toBe('Test Article');
+  });
+
+  it('accepts X-Api-Key header auth', async () => {
+    const res = await request(app).get('/articles').set('X-Api-Key', SECRET).expect(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('passes the limit param to getLatestArticles', async () => {
+    await request(app).get(`/articles?secret=${SECRET}&limit=10`).expect(200);
+    expect(getLatestArticles).toHaveBeenCalledWith(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /rss  — RSS 2.0 feed
+// ---------------------------------------------------------------------------
+
+describe('GET /rss', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (getLatestArticles as jest.Mock).mockResolvedValue([]);
+    (generateRssFeed as jest.Mock).mockReturnValue('<?xml version="1.0"?><rss version="2.0"></rss>');
+  });
+
+  it('returns 401 for a wrong secret', async () => {
+    await request(app).get('/rss?secret=wrong').expect(401);
+  });
+
+  it('returns 200 with RSS XML via query param', async () => {
+    const res = await request(app).get(`/rss?secret=${SECRET}`).expect(200);
+    expect(res.headers['content-type']).toMatch(/rss\+xml/);
+    expect(res.text).toContain('<rss');
+  });
+
+  it('accepts X-Api-Key header auth', async () => {
+    const res = await request(app).get('/rss').set('X-Api-Key', SECRET).expect(200);
+    expect(res.headers['content-type']).toMatch(/rss\+xml/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /summarize/:id  — on-demand AI executive summary
+// ---------------------------------------------------------------------------
+
+describe('GET /summarize/:id', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (getArticleById as jest.Mock).mockResolvedValue({
+      id: 1, title: 'Test Article', url: 'http://example.com/article', notes: '',
+    });
+    (summarizeArticleFromUrl as jest.Mock).mockResolvedValue('Executive summary text.');
+  });
+
+  it('returns 401 for a wrong secret', async () => {
+    await request(app).get('/summarize/1?secret=wrong').expect(401);
+  });
+
+  it('returns 400 for a non-numeric article ID', async () => {
+    await request(app).get(`/summarize/abc?secret=${SECRET}`).expect(400);
+  });
+
+  it('returns 404 when the article does not exist', async () => {
+    (getArticleById as jest.Mock).mockResolvedValueOnce(null);
+    await request(app).get(`/summarize/99?secret=${SECRET}`).expect(404);
+  });
+
+  it('returns 200 with a plain text summary', async () => {
+    const res = await request(app).get(`/summarize/1?secret=${SECRET}`).expect(200);
+    expect(res.headers['content-type']).toMatch(/text\/plain/);
+    expect(res.text).toBe('Executive summary text.');
+    expect(summarizeArticleFromUrl).toHaveBeenCalledWith('http://example.com/article', 'Test Article');
+  });
+
+  it('returns 500 when the LLM call fails', async () => {
+    (summarizeArticleFromUrl as jest.Mock).mockRejectedValueOnce(new Error('Gemini timeout'));
+    await request(app).get(`/summarize/1?secret=${SECRET}`).expect(500);
+  });
+
+  it('accepts X-Api-Key header auth', async () => {
+    await request(app).get('/summarize/1').set('X-Api-Key', SECRET).expect(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /articles/:id  — X-Api-Key header variant
+// ---------------------------------------------------------------------------
+
+describe('PATCH /articles/:id — header auth', () => {
+  it('accepts X-Api-Key header auth', async () => {
+    (updateArticle as jest.Mock).mockResolvedValue('2026-05-09T12:00:00.000Z');
+    const res = await request(app)
+      .patch('/articles/1')
+      .set('X-Api-Key', SECRET)
+      .send({ status: 'read' })
+      .expect(200);
+    expect(res.body).toEqual({ id: 1, updated_at: '2026-05-09T12:00:00.000Z' });
   });
 });
