@@ -19,7 +19,7 @@ const MAX_SUMMARY_LEN = 10_000;
 const MAX_NOTES_LEN   = 10_000;
 const MAX_TAGS        = 20;
 const MAX_TAG_LEN     = 50;
-const VALID_CONTENT_TYPES = ['newsletter', 'article', 'video', 'podcast', 'other'];
+const VALID_CONTENT_TYPES = ['newsletter', 'article', 'video', 'podcast', 'webpage', 'notebook', 'pdf', 'other'];
 
 function getQueryParam(req: express.Request, name: string): string | undefined {
   return new URL(req.url, 'https://localhost').searchParams.get(name) ?? undefined;
