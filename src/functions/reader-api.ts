@@ -32,7 +32,7 @@ function parseLimit(req: express.Request): number {
 }
 
 function getSecret(req: express.Request): string | undefined {
-  return (req.headers['x-api-key'] as string | undefined) ?? getQueryParam(req, 'secret');
+  return req.headers['x-api-key'] as string | undefined;
 }
 
 function validateArticleUrl(raw: string): string | null {
@@ -48,7 +48,8 @@ function validateArticleUrl(raw: string): string | null {
 
 router.get('/rss', async (req, res) => {
   try {
-    if (getSecret(req) !== config.RSS_SECRET) return res.status(401).send('Unauthorized');
+    const rssSecret = getSecret(req) ?? getQueryParam(req, 'secret');
+    if (rssSecret !== config.RSS_SECRET) return res.status(401).send('Unauthorized');
     const articles = await getLatestArticles(parseLimit(req));
     const xml = generateRssFeed(articles as any[], config.SERVICE_URL);
     res.set('Content-Type', 'application/rss+xml');
