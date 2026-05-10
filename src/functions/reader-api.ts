@@ -62,7 +62,11 @@ router.get('/rss', async (req, res) => {
 router.get('/articles', async (req, res) => {
   try {
     if (getSecret(req) !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
-    const articles = await getLatestArticles(parseLimit(req));
+    const updatedSinceRaw = getQueryParam(req, 'updated_since');
+    if (updatedSinceRaw !== undefined && isNaN(new Date(updatedSinceRaw).getTime())) {
+      return res.status(400).json({ error: 'updated_since must be a valid ISO timestamp' });
+    }
+    const articles = await getLatestArticles(parseLimit(req), updatedSinceRaw);
     res.json(articles);
   } catch (err) {
     logger.error('Error fetching articles JSON', { error: String(err) });

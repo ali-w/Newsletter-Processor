@@ -64,7 +64,11 @@ export async function insertArticle(newsletterId: number, article: Article) {
   });
 }
 
-export async function getLatestArticles(limit: number) {
+export async function getLatestArticles(limit: number, updatedSince?: string) {
+  const whereClause = updatedSince
+    ? `WHERE COALESCE(a.updated_at, a.created_at) > ?`
+    : '';
+  const args: (number | string)[] = updatedSince ? [updatedSince, limit] : [limit];
   const result = await db.execute({
     sql: `
       SELECT
@@ -88,10 +92,11 @@ export async function getLatestArticles(limit: number) {
         n.received_at
       FROM articles a
       JOIN newsletters n ON a.newsletter_id = n.id
+      ${whereClause}
       ORDER BY n.received_at DESC, a.id ASC
       LIMIT ?
     `,
-    args: [limit]
+    args
   });
   return result.rows.map(row => ({
     ...row,
