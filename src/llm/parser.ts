@@ -113,44 +113,115 @@ export async function extractArticles(newsletterContent: string): Promise<Articl
   throw lastError;
 }
 
-/**
- * Fetches the article at `url`, sends its content to Gemini and returns a
- * plain-text executive summary suitable for sharing in Microsoft Teams with
- * an Agility Leads / HR / Operating Model leadership audience.
- */
+async function fetchArticleContent(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; NewsletterProcessor/1.0)',
+      'Accept': 'text/html,application/xhtml+xml',
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+  }
+
+  const html = await response.text();
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .substring(0, 100_000);
+}
+
+const describeSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    summary: { type: Type.STRING, description: 'A 1–2 sentence neutral description of the article' },
+    suggestedTag: { type: Type.STRING, description: 'A single lowercase tag or slug for the article' },
+  },
+  required: ['summary', 'suggestedTag'],
+};
+
+export async function describeArticleFromUrl(
+  url: string,
+  title: string,
+  existingTags: string[],
+): Promise<{ summary: string; suggestedTag: string }> {
+  logger.info('Fetching article content for describe', { url });
+
+  let articleContent: string;
+  try {
+    articleContent = await fetchArticleContent(url);
+  } catch (err) {
+    throw new Error(`Failed to fetch article at ${url}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const tagHint = existingTags.length
+    ? `Choose the single best tag from this list: ${JSON.stringify(existingTags)}. If none fit, invent a short lowercase hyphenated slug.`
+    : `Invent a short lowercase hyphenated slug tag that describes the topic.`;
+
+  const prompt = `Article title: "${title}"
+
+Article content:
+${articleContent}
+
+Write a neutral 1–2 sentence description of what this article is about. Then ${tagHint}`;
+
+  logger.info('Requesting article description from Gemini', { title });
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: describeSchema,
+          temperature: 0.2,
+        },
+      });
+
+      const text = response.text;
+      if (!text) throw new Error('Empty response from Gemini');
+
+      const result = JSON.parse(text) as { summary: string; suggestedTag: string };
+      logger.info(`Description generated on attempt ${attempt}/${MAX_RETRIES}`);
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt < MAX_RETRIES) {
+        const waitMs = Math.min(Math.pow(2, attempt) * 1000 + Math.random() * 1000, MAX_WAIT_MS);
+        logger.error(`Describe attempt ${attempt}/${MAX_RETRIES} failed`, {
+          error: error instanceof Error ? error.message : String(error),
+          retryInMs: waitMs,
+        });
+        await sleep(waitMs);
+      } else {
+        logger.error(`Describe failed on final attempt ${attempt}/${MAX_RETRIES}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 export async function summarizeArticleFromUrl(url: string, title: string): Promise<string> {
   logger.info('Fetching article content', { url });
 
   let articleContent: string;
   try {
-    const response = await fetch(url, {
-      headers: {
-        // Appear as a standard browser to avoid bot-blocking
-        'User-Agent': 'Mozilla/5.0 (compatible; NewsletterProcessor/1.0)',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
-      signal: AbortSignal.timeout(15_000), // 15s page-fetch timeout
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-
-    // Strip HTML tags to reduce noise in the prompt
-    const html = await response.text();
-    articleContent = html
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim()
-      .substring(0, 100_000); // cap at ~100k chars; well within Gemini's context
+    articleContent = await fetchArticleContent(url);
   } catch (err) {
     throw new Error(`Failed to fetch article at ${url}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const prompt = `You are an expert technology and organisational strategy thought leader working for a CTO.
-
 Be professional but conversational—clear and direct without being stiff or corporate.
 
 Communication style:

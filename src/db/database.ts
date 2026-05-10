@@ -19,6 +19,9 @@ export interface Article {
   notes?: string;
   updated_at?: string | null;
   note_updated_at?: string | null;
+  tags?: string[];
+  content_type?: string;
+  saved?: boolean;
 }
 
 export interface ArticlePatch {
@@ -27,6 +30,7 @@ export interface ArticlePatch {
   notes?: string;
   tags?: string[];
   saved?: boolean;
+  summary?: string;
 }
 
 export interface Newsletter {
@@ -92,7 +96,7 @@ export async function getLatestArticles(limit: number) {
 
 export async function getArticleById(id: number): Promise<Article | null> {
   const result = await db.execute({
-    sql: `SELECT id, newsletter_id, title, summary, url, created_at FROM articles WHERE id = ?`,
+    sql: `SELECT id, newsletter_id, title, summary, url, created_at, tags FROM articles WHERE id = ?`,
     args: [id]
   });
 
@@ -106,6 +110,7 @@ export async function getArticleById(id: number): Promise<Article | null> {
     summary: String(row.summary),
     url: String(row.url),
     created_at: String(row.created_at),
+    tags: JSON.parse(String(row.tags ?? '[]')),
   };
 }
 
@@ -140,10 +145,29 @@ export async function updateArticle(id: number, patch: ArticlePatch): Promise<st
     sets.push('saved = ?');
     args.push(patch.saved ? 1 : 0);
   }
+  if (patch.summary !== undefined) {
+    sets.push('summary = ?');
+    args.push(patch.summary);
+  }
 
   args.push(id);
   await db.execute({ sql: `UPDATE articles SET ${sets.join(', ')} WHERE id = ?`, args });
   return now;
+}
+
+export async function getDistinctTags(): Promise<string[]> {
+  const result = await db.execute({
+    sql: `SELECT tags FROM articles WHERE tags IS NOT NULL AND tags != '[]'`,
+    args: [],
+  });
+  const seen = new Set<string>();
+  for (const row of result.rows) {
+    try {
+      const arr = JSON.parse(String(row.tags ?? '[]'));
+      if (Array.isArray(arr)) arr.forEach((t: unknown) => { if (typeof t === 'string' && t) seen.add(t); });
+    } catch { /* skip malformed */ }
+  }
+  return [...seen].sort();
 }
 
 export async function updateArticles(
