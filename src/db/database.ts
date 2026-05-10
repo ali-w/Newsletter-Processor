@@ -25,6 +25,8 @@ export interface ArticlePatch {
   status?: 'unread' | 'read' | 'skipped';
   rating?: number | null;
   notes?: string;
+  tags?: string[];
+  saved?: boolean;
 }
 
 export interface Newsletter {
@@ -69,6 +71,9 @@ export async function getLatestArticles(limit: number) {
         a.notes,
         a.updated_at,
         a.note_updated_at,
+        a.tags,
+        a.content_type,
+        a.saved,
         n.name as newsletter_name,
         n.received_at
       FROM articles a
@@ -78,7 +83,11 @@ export async function getLatestArticles(limit: number) {
     `,
     args: [limit]
   });
-  return result.rows;
+  return result.rows.map(row => ({
+    ...row,
+    tags: JSON.parse(String(row.tags ?? '[]')),
+    saved: Boolean(row.saved),
+  }));
 }
 
 export async function getArticleById(id: number): Promise<Article | null> {
@@ -122,6 +131,14 @@ export async function updateArticle(id: number, patch: ArticlePatch): Promise<st
     args.push(patch.notes);
     sets.push('note_updated_at = ?');
     args.push(now);
+  }
+  if ('tags' in patch) {
+    sets.push('tags = ?');
+    args.push(JSON.stringify(patch.tags ?? []));
+  }
+  if ('saved' in patch) {
+    sets.push('saved = ?');
+    args.push(patch.saved ? 1 : 0);
   }
 
   args.push(id);

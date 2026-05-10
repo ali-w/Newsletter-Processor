@@ -57,7 +57,7 @@ router.patch('/articles/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid article ID' });
 
-  const { status, rating, notes } = req.body;
+  const { status, rating, notes, tags, saved } = req.body;
 
   if (status !== undefined && !['unread', 'read', 'skipped'].includes(status)) {
     return res.status(400).json({ error: 'status must be "unread", "read", or "skipped"' });
@@ -68,11 +68,19 @@ router.patch('/articles/:id', async (req, res) => {
   if (notes !== undefined && typeof notes !== 'string') {
     return res.status(400).json({ error: 'notes must be a string' });
   }
+  if ('tags' in req.body && (!Array.isArray(tags) || tags.some((t: unknown) => typeof t !== 'string'))) {
+    return res.status(400).json({ error: 'tags must be an array of strings' });
+  }
+  if ('saved' in req.body && typeof saved !== 'boolean') {
+    return res.status(400).json({ error: 'saved must be a boolean' });
+  }
 
   const patch: ArticlePatch = {};
   if (status !== undefined) patch.status = status;
   if ('rating' in req.body) patch.rating = rating ?? null;
   if (notes !== undefined) patch.notes = notes;
+  if ('tags' in req.body) patch.tags = tags ?? [];
+  if ('saved' in req.body) patch.saved = saved;
 
   if (Object.keys(patch).length === 0) {
     return res.status(400).json({ error: 'No recognised fields to update' });
@@ -96,6 +104,8 @@ router.post('/articles/updates', async (req, res) => {
     if (status !== undefined && ['unread', 'read', 'skipped'].includes(status)) patch.status = status;
     if ('rating' in item) patch.rating = (Number.isInteger(rating) && rating >= 1 && rating <= 5) ? rating : null;
     if (typeof notes === 'string') patch.notes = notes;
+    if (Array.isArray(item.tags)) patch.tags = item.tags.filter((t: unknown) => typeof t === 'string');
+    if (typeof item.saved === 'boolean') patch.saved = item.saved;
     updates.push({ id, ...patch });
   }
 
