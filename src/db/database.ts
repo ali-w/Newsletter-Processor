@@ -22,6 +22,8 @@ export interface Article {
   tags?: string[];
   content_type?: string;
   saved?: boolean;
+  cached_content_url?: string | null;
+  cached_at?: string | null;
 }
 
 export interface ArticlePatch {
@@ -31,6 +33,8 @@ export interface ArticlePatch {
   tags?: string[];
   saved?: boolean;
   summary?: string;
+  cached_content_url?: string | null;
+  cached_at?: string | null;
 }
 
 export interface Newsletter {
@@ -78,6 +82,8 @@ export async function getLatestArticles(limit: number) {
         a.tags,
         a.content_type,
         a.saved,
+        a.cached_content_url,
+        a.cached_at,
         n.name as newsletter_name,
         n.received_at
       FROM articles a
@@ -96,7 +102,7 @@ export async function getLatestArticles(limit: number) {
 
 export async function getArticleById(id: number): Promise<Article | null> {
   const result = await db.execute({
-    sql: `SELECT id, newsletter_id, title, summary, url, created_at, tags FROM articles WHERE id = ?`,
+    sql: `SELECT id, newsletter_id, title, summary, url, created_at, notes, tags, content_type, cached_content_url, cached_at FROM articles WHERE id = ?`,
     args: [id]
   });
 
@@ -110,7 +116,11 @@ export async function getArticleById(id: number): Promise<Article | null> {
     summary: String(row.summary),
     url: String(row.url),
     created_at: String(row.created_at),
+    notes: row.notes != null ? String(row.notes) : undefined,
     tags: JSON.parse(String(row.tags ?? '[]')),
+    content_type: row.content_type != null ? String(row.content_type) : undefined,
+    cached_content_url: row.cached_content_url != null ? String(row.cached_content_url) : null,
+    cached_at: row.cached_at != null ? String(row.cached_at) : null,
   };
 }
 
@@ -148,6 +158,14 @@ export async function updateArticle(id: number, patch: ArticlePatch): Promise<st
   if (patch.summary !== undefined) {
     sets.push('summary = ?');
     args.push(patch.summary);
+  }
+  if ('cached_content_url' in patch) {
+    sets.push('cached_content_url = ?');
+    args.push(patch.cached_content_url ?? null);
+  }
+  if ('cached_at' in patch) {
+    sets.push('cached_at = ?');
+    args.push(patch.cached_at ?? null);
   }
 
   args.push(id);

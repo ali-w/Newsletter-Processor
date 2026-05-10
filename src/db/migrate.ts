@@ -37,6 +37,8 @@ async function migrate() {
     `ALTER TABLE articles ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`,
     `ALTER TABLE articles ADD COLUMN content_type TEXT NOT NULL DEFAULT 'newsletter'`,
     `ALTER TABLE articles ADD COLUMN saved INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE articles ADD COLUMN cached_content_url TEXT`,
+    `ALTER TABLE articles ADD COLUMN cached_at DATETIME`,
   ];
   for (const sql of alterations) {
     try {

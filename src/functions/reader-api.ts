@@ -117,6 +117,13 @@ router.patch('/articles/:id', async (req, res) => {
   const updatedAt = await updateArticle(id, patch);
   if (updatedAt === null) return res.status(404).json({ error: 'Article not found' });
 
+  if (patch.saved === true && config.SUMMARIZE_URL) {
+    fetch(`${config.SUMMARIZE_URL}/articles/${id}/cache`, {
+      method: 'POST',
+      headers: { 'x-api-key': config.RSS_SECRET },
+    }).catch(err => logger.warn('Auto-cache trigger failed', { articleId: id, error: String(err) }));
+  }
+
   return res.json({ id, updated_at: updatedAt });
 });
 
@@ -145,6 +152,13 @@ router.post('/articles', async (req, res) => {
 
   try {
     const article = await createManualArticle({ title, url, summary, tags, content_type, saved });
+    const ct = content_type ?? 'newsletter';
+    if (config.SUMMARIZE_URL && !['video', 'podcast', 'other'].includes(ct)) {
+      fetch(`${config.SUMMARIZE_URL}/articles/${article.id}/cache`, {
+        method: 'POST',
+        headers: { 'x-api-key': config.RSS_SECRET },
+      }).catch(err => logger.warn('Auto-cache trigger failed', { articleId: article.id, error: String(err) }));
+    }
     return res.status(201).json(article);
   } catch (err) {
     logger.error('Error creating article', { error: String(err) });

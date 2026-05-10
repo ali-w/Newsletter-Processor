@@ -113,6 +113,18 @@ export async function extractArticles(newsletterContent: string): Promise<Articl
   throw lastError;
 }
 
+export async function fetchRawHtml(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; NewsletterProcessor/1.0)',
+      'Accept': 'text/html,application/xhtml+xml',
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+  return response.text();
+}
+
 async function fetchArticleContent(url: string): Promise<string> {
   const response = await fetch(url, {
     headers: {
@@ -211,7 +223,7 @@ Write a neutral 1–2 sentence description of what this article is about. Then $
   throw lastError;
 }
 
-export async function summarizeArticleFromUrl(url: string, title: string): Promise<string> {
+export async function summarizeArticleFromUrl(url: string, title: string, notes?: string): Promise<string> {
   logger.info('Fetching article content', { url });
 
   let articleContent: string;
@@ -250,7 +262,12 @@ Keep the tone professional, insightful and direct.
 
 Article title: ${title}
 Article URL: ${url}
+${notes?.trim() ? `
+The reader has added these personal notes about this article:
+"${notes.trim()}"
 
+Use these notes to focus and shape your summary — prioritise the aspects of the article most relevant to what the reader has highlighted.
+` : ''}
 Article content:
 ${articleContent}
 `;

@@ -29,6 +29,12 @@ const envSchema = z.object({
   GCP_REGION: z.string().default('europe-west1'),
   TASKS_QUEUE: z.string().default('newsletter-ingest'),
   INGEST_WORKER_URL: z.string().url().optional(),
+
+  // GCS article cache bucket (used by summarize function)
+  GCS_BUCKET: z.string().optional(),
+
+  // Summarize function URL (used by reader-api to trigger auto-cache on save)
+  SUMMARIZE_URL: z.string().url().optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

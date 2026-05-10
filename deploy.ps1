@@ -59,6 +59,10 @@ $commonSecrets = (
   'TURSO_DATABASE_URL=TURSO_DATABASE_URL:latest'
 ) -join ','
 
+# Secrets for specific functions
+$summarizeSecrets = ($commonSecrets, 'GCS_BUCKET=GCS_BUCKET:latest') -join ','
+$readerApiSecrets = ($commonSecrets, 'SUMMARIZE_URL=SUMMARIZE_URL:latest') -join ','
+
 # ---------------------------------------------------------------------------
 # Non-secret operational vars - safe to pass as plain env vars
 # ---------------------------------------------------------------------------
@@ -81,7 +85,8 @@ function Publish-Function {
     [string]$Name,
     [string]$EntryPoint,
     [string]$Timeout,
-    [hashtable]$EnvVars
+    [hashtable]$EnvVars,
+    [string]$Secrets = $commonSecrets
   )
 
   $envString = ($EnvVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ','
@@ -98,7 +103,7 @@ function Publish-Function {
     --trigger-http `
     --allow-unauthenticated `
     --timeout=$Timeout `
-    "--set-secrets=$commonSecrets" `
+    "--set-secrets=$Secrets" `
     "--set-env-vars=$envString"
 
   if ($LASTEXITCODE -ne 0) {
@@ -163,10 +168,19 @@ if ($RunMigration) {
 
 if ($Setup) {
   Write-Host "`nEnabling required GCP APIs..." -ForegroundColor Yellow
-  gcloud services enable cloudfunctions.googleapis.com cloudbuild.googleapis.com run.googleapis.com artifactregistry.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com --project=$ProjectId
+  gcloud services enable cloudfunctions.googleapis.com cloudbuild.googleapis.com run.googleapis.com artifactregistry.googleapis.com cloudtasks.googleapis.com secretmanager.googleapis.com storage.googleapis.com --project=$ProjectId
 
   Write-Host "`nCreating Cloud Tasks queue '$QueueName' in $Region..." -ForegroundColor Yellow
   gcloud tasks queues create $QueueName --location=$Region --project=$ProjectId
+
+  $BucketName = "$ProjectId-article-cache"
+  Write-Host "`nCreating GCS article cache bucket '$BucketName'..." -ForegroundColor Yellow
+  gsutil mb -p $ProjectId -l $Region "gs://$BucketName"
+  $ServiceAccount = "$ProjectId@appspot.gserviceaccount.com"
+  Write-Host "  Granting Storage Object Admin to $ServiceAccount..." -ForegroundColor Gray
+  gsutil iam ch "serviceAccount:${ServiceAccount}:roles/storage.objectAdmin" "gs://$BucketName"
+  Write-Host "  Add GCS_BUCKET secret to Secret Manager:" -ForegroundColor Yellow
+  Write-Host "    gcloud secrets create GCS_BUCKET --data-file=- <<< '$BucketName'" -ForegroundColor Gray
 }
 
 # ---------------------------------------------------------------------------
@@ -176,10 +190,10 @@ if ($Setup) {
 $deployAll = ($Function -eq '')
 
 if ($deployAll -or $Function -eq 'reader-api') {
-  Publish-Function -Name 'reader-api'    -EntryPoint 'readerApi'    -Timeout '60s'  -EnvVars $commonEnvVars
+  Publish-Function -Name 'reader-api'    -EntryPoint 'readerApi'    -Timeout '60s'  -EnvVars $commonEnvVars -Secrets $readerApiSecrets
 }
 if ($deployAll -or $Function -eq 'summarize') {
-  Publish-Function -Name 'summarize'     -EntryPoint 'summarize'    -Timeout '540s' -EnvVars $commonEnvVars
+  Publish-Function -Name 'summarize'     -EntryPoint 'summarize'    -Timeout '540s' -EnvVars $commonEnvVars -Secrets $summarizeSecrets
 }
 if ($deployAll -or $Function -eq 'ingest-worker') {
   Publish-Function -Name 'ingest-worker' -EntryPoint 'ingestWorker' -Timeout '540s' -EnvVars $commonEnvVars
