@@ -155,6 +155,57 @@ export async function updateArticle(id: number, patch: ArticlePatch): Promise<st
   return now;
 }
 
+async function getOrCreateManualNewsletter(): Promise<number> {
+  const existing = await db.execute({
+    sql: `SELECT id FROM newsletters WHERE name = 'Manual' LIMIT 1`,
+    args: [],
+  });
+  if (existing.rows.length > 0) return Number(existing.rows[0].id);
+  const result = await db.execute({
+    sql: `INSERT INTO newsletters (name, received_at) VALUES ('Manual', ?)`,
+    args: [new Date().toISOString()],
+  });
+  return Number(result.lastInsertRowid);
+}
+
+export async function createManualArticle(data: {
+  title: string;
+  url: string;
+  summary?: string;
+  tags?: string[];
+  content_type?: string;
+  saved?: boolean;
+}): Promise<Article> {
+  const newsletterId = await getOrCreateManualNewsletter();
+  const now = new Date().toISOString();
+  const result = await db.execute({
+    sql: `INSERT INTO articles (newsletter_id, title, summary, url, tags, content_type, saved, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      newsletterId,
+      data.title,
+      data.summary ?? '',
+      data.url,
+      JSON.stringify(data.tags ?? []),
+      data.content_type ?? 'newsletter',
+      data.saved ? 1 : 0,
+      now,
+    ],
+  });
+  return {
+    id: Number(result.lastInsertRowid),
+    newsletter_id: newsletterId,
+    title: data.title,
+    summary: data.summary ?? '',
+    url: data.url,
+    created_at: now,
+    status: 'unread',
+    tags: data.tags ?? [],
+    content_type: data.content_type ?? 'newsletter',
+    saved: data.saved ?? false,
+  };
+}
+
 export async function getDistinctTags(): Promise<string[]> {
   const result = await db.execute({
     sql: `SELECT tags FROM articles WHERE tags IS NOT NULL AND tags != '[]'`,

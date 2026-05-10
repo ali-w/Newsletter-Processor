@@ -3,7 +3,7 @@ import cors from 'cors';
 import { HttpFunction } from '@google-cloud/functions-framework';
 import { config } from '../config';
 import { logger } from '../logger';
-import { getLatestArticles, updateArticle, updateArticles, ArticlePatch } from '../db/database';
+import { getLatestArticles, updateArticle, updateArticles, createManualArticle, ArticlePatch } from '../db/database';
 import { generateRssFeed } from '../rss/generator';
 import { parseJsonBody } from './parseBody';
 
@@ -90,6 +90,29 @@ router.patch('/articles/:id', async (req, res) => {
   if (updatedAt === null) return res.status(404).json({ error: 'Article not found' });
 
   return res.json({ id, updated_at: updatedAt });
+});
+
+router.post('/articles', async (req, res) => {
+  if (getSecret(req) !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { title, url, summary, tags, content_type, saved } = req.body ?? {};
+
+  if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title is required and must be a string' });
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url is required and must be a string' });
+  if (summary !== undefined && typeof summary !== 'string') return res.status(400).json({ error: 'summary must be a string' });
+  if (tags !== undefined && (!Array.isArray(tags) || tags.some((t: unknown) => typeof t !== 'string'))) {
+    return res.status(400).json({ error: 'tags must be an array of strings' });
+  }
+  if (content_type !== undefined && typeof content_type !== 'string') return res.status(400).json({ error: 'content_type must be a string' });
+  if (saved !== undefined && typeof saved !== 'boolean') return res.status(400).json({ error: 'saved must be a boolean' });
+
+  try {
+    const article = await createManualArticle({ title, url, summary, tags, content_type, saved });
+    return res.status(201).json(article);
+  } catch (err) {
+    logger.error('Error creating article', { error: String(err) });
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 router.post('/articles/updates', async (req, res) => {
