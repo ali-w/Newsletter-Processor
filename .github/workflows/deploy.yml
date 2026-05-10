@@ -33,6 +33,10 @@ env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
   GCP_REGION:  ${{ vars.GCP_REGION  || 'europe-west1' }}
   TASKS_QUEUE: ${{ vars.TASKS_QUEUE || 'newsletter-ingest' }}
+  GCS_BUCKET: ${{ vars.GCS_BUCKET || 'gen-lang-client-0725921603-article-cache' }}
+   
+    --set-env-vars==YOUR_BUCKET_NAME
+
   ARTICLES_MAX_LIMIT: ${{ vars.ARTICLES_MAX_LIMIT || '200' }}
   # Secrets bound from GCP Secret Manager — identical for every function
   SECRETS_BINDING: >-
@@ -110,7 +114,7 @@ jobs:
             --allow-unauthenticated \
             --timeout=60s \
             --set-secrets="$SECRETS_BINDING" \
-            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT"
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET"
 
       - name: Deploy summarize
         run: |
@@ -125,7 +129,7 @@ jobs:
             --allow-unauthenticated \
             --timeout=540s \
             --set-secrets="$SECRETS_BINDING" \
-            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT"
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET"
 
       # ingest-worker must deploy before ingest so we can capture its URL
 
@@ -142,7 +146,7 @@ jobs:
             --allow-unauthenticated \
             --timeout=540s \
             --set-secrets="$SECRETS_BINDING" \
-            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT"
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET"
 
       - name: Get ingest-worker URL
         id: ingest_worker
