@@ -99,22 +99,7 @@ jobs:
           export SERVICE_URL=$(gcloud secrets versions access latest --secret=SERVICE_URL --project="$GCP_PROJECT")
           npm run migrate
 
-      # Deploy reader-api and summarize in parallel (independent of each other)
-
-      - name: Deploy reader-api
-        run: |
-          gcloud functions deploy reader-api \
-            --gen2 \
-            --project="$GCP_PROJECT" \
-            --region="$GCP_REGION" \
-            --runtime=nodejs22 \
-            --source=deploy/dist \
-            --entry-point=readerApi \
-            --trigger-http \
-            --allow-unauthenticated \
-            --timeout=60s \
-            --set-secrets="$SECRETS_BINDING" \
-            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET"
+      # summarize must deploy before reader-api so we can pass its URL
 
       - name: Deploy summarize
         run: |
@@ -130,6 +115,31 @@ jobs:
             --timeout=540s \
             --set-secrets="$SECRETS_BINDING" \
             --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET"
+
+      - name: Get summarize URL
+        id: summarize
+        run: |
+          URL=$(gcloud functions describe summarize \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(serviceConfig.uri)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy reader-api
+        run: |
+          gcloud functions deploy reader-api \
+            --gen2 \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --runtime=nodejs22 \
+            --source=deploy/dist \
+            --entry-point=readerApi \
+            --trigger-http \
+            --allow-unauthenticated \
+            --timeout=60s \
+            --set-secrets="$SECRETS_BINDING" \
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET,SUMMARIZE_URL=${{ steps.summarize.outputs.url }}"
 
       # ingest-worker must deploy before ingest so we can capture its URL
 
@@ -178,9 +188,7 @@ jobs:
           READER_API_URL=$(gcloud functions describe reader-api \
             --gen2 --project="$GCP_PROJECT" --region="$GCP_REGION" \
             --format='value(serviceConfig.uri)')
-          SUMMARIZE_URL=$(gcloud functions describe summarize \
-            --gen2 --project="$GCP_PROJECT" --region="$GCP_REGION" \
-            --format='value(serviceConfig.uri)')
+          SUMMARIZE_URL="${{ steps.summarize.outputs.url }}"
           INGEST_URL=$(gcloud functions describe ingest \
             --gen2 --project="$GCP_PROJECT" --region="$GCP_REGION" \
             --format='value(serviceConfig.uri)')
