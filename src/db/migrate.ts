@@ -40,6 +40,9 @@ async function migrate() {
     `ALTER TABLE articles ADD COLUMN cached_content_url TEXT`,
     `ALTER TABLE articles ADD COLUMN cached_at DATETIME`,
     `ALTER TABLE articles ADD COLUMN ai_summary TEXT`,
+    `ALTER TABLE articles ADD COLUMN pdf_type TEXT`,
+    `ALTER TABLE articles ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'done'`,
+    `ALTER TABLE articles ADD COLUMN extract_ocr INTEGER NOT NULL DEFAULT 1`,
   ];
   for (const sql of alterations) {
     try {
@@ -48,6 +51,37 @@ async function migrate() {
       if (!String(e?.message).includes('duplicate column')) throw e;
     }
   }
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS article_ocr (
+      article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+      ocr_text   TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.execute(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS article_ocr_fts
+      USING fts5(ocr_text, content='article_ocr', content_rowid='article_id')
+  `);
+
+  await db.execute(`
+    CREATE TRIGGER IF NOT EXISTS article_ocr_ai AFTER INSERT ON article_ocr BEGIN
+      INSERT INTO article_ocr_fts(rowid, ocr_text) VALUES (new.article_id, new.ocr_text);
+    END
+  `);
+
+  await db.execute(`
+    CREATE TRIGGER IF NOT EXISTS article_ocr_ad AFTER DELETE ON article_ocr BEGIN
+      DELETE FROM article_ocr_fts WHERE rowid = old.article_id;
+    END
+  `);
+
+  await db.execute(`
+    CREATE TRIGGER IF NOT EXISTS article_ocr_au AFTER UPDATE ON article_ocr BEGIN
+      UPDATE article_ocr_fts SET ocr_text = new.ocr_text WHERE rowid = new.article_id;
+    END
+  `);
 
   console.log('Migration complete');
   process.exit(0);

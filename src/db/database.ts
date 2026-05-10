@@ -25,6 +25,9 @@ export interface Article {
   cached_content_url?: string | null;
   cached_at?: string | null;
   ai_summary?: string | null;
+  pdf_type?: 'typed' | 'handwritten' | null;
+  processing_status?: 'pending' | 'processing' | 'done' | 'error';
+  extract_ocr?: boolean;
 }
 
 export interface ArticleRow extends Omit<Article, 'id'> {
@@ -93,6 +96,8 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
         a.cached_content_url,
         a.cached_at,
         a.ai_summary,
+        a.pdf_type,
+        a.processing_status,
         n.name as newsletter_name,
         n.received_at
       FROM articles a
@@ -107,12 +112,14 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
     ...(row as Record<string, unknown>),
     tags: JSON.parse(String(row.tags ?? '[]')),
     saved: Boolean(row.saved),
+    pdf_type: row.pdf_type != null ? String(row.pdf_type) : null,
+    processing_status: row.processing_status != null ? String(row.processing_status) : 'done',
   })) as ArticleRow[];
 }
 
 export async function getArticleById(id: number): Promise<Article | null> {
   const result = await db.execute({
-    sql: `SELECT id, newsletter_id, title, summary, url, created_at, notes, tags, content_type, cached_content_url, cached_at, ai_summary FROM articles WHERE id = ?`,
+    sql: `SELECT id, newsletter_id, title, summary, url, created_at, notes, tags, content_type, cached_content_url, cached_at, ai_summary, pdf_type, processing_status, extract_ocr FROM articles WHERE id = ?`,
     args: [id]
   });
 
@@ -132,6 +139,9 @@ export async function getArticleById(id: number): Promise<Article | null> {
     cached_content_url: row.cached_content_url != null ? String(row.cached_content_url) : null,
     cached_at: row.cached_at != null ? String(row.cached_at) : null,
     ai_summary: row.ai_summary != null ? String(row.ai_summary) : null,
+    pdf_type: row.pdf_type != null ? (String(row.pdf_type) as 'typed' | 'handwritten') : null,
+    processing_status: row.processing_status != null ? (String(row.processing_status) as 'pending' | 'processing' | 'done' | 'error') : 'done',
+    extract_ocr: row.extract_ocr != null ? Boolean(row.extract_ocr) : true,
   };
 }
 
@@ -191,12 +201,15 @@ export async function createManualArticle(data: {
   tags?: string[];
   content_type?: string;
   saved?: boolean;
+  pdf_type?: 'typed' | 'handwritten';
+  processing_status?: 'pending' | 'processing' | 'done' | 'error';
+  extract_ocr?: boolean;
 }): Promise<Article> {
   const newsletterId = await getOrCreateManualNewsletter();
   const now = new Date().toISOString();
   const result = await db.execute({
-    sql: `INSERT INTO articles (newsletter_id, title, summary, url, tags, content_type, saved, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO articles (newsletter_id, title, summary, url, tags, content_type, saved, created_at, pdf_type, processing_status, extract_ocr)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       newsletterId,
       data.title,
@@ -206,6 +219,9 @@ export async function createManualArticle(data: {
       data.content_type ?? 'newsletter',
       data.saved ? 1 : 0,
       now,
+      data.pdf_type ?? null,
+      data.processing_status ?? 'done',
+      data.extract_ocr !== false ? 1 : 0,
     ],
   });
   return {
@@ -219,6 +235,9 @@ export async function createManualArticle(data: {
     tags: data.tags ?? [],
     content_type: data.content_type ?? 'newsletter',
     saved: data.saved ?? false,
+    pdf_type: data.pdf_type ?? null,
+    processing_status: data.processing_status ?? 'done',
+    extract_ocr: data.extract_ocr !== false,
   };
 }
 
@@ -256,6 +275,44 @@ export async function setCachedContent(id: number, url: string, cachedAt: string
     sql: `UPDATE articles SET cached_content_url = ?, cached_at = ?, updated_at = ? WHERE id = ?`,
     args: [url, cachedAt, new Date().toISOString(), id],
   });
+}
+
+export async function setPdfProcessingStatus(
+  id: number,
+  status: 'pending' | 'processing' | 'done' | 'error',
+): Promise<void> {
+  await db.execute({
+    sql: `UPDATE articles SET processing_status = ?, updated_at = ? WHERE id = ?`,
+    args: [status, new Date().toISOString(), id],
+  });
+}
+
+export async function setOcrText(articleId: number, text: string): Promise<void> {
+  await db.execute({
+    sql: `INSERT OR REPLACE INTO article_ocr (article_id, ocr_text) VALUES (?, ?)`,
+    args: [articleId, text],
+  });
+}
+
+export async function searchByOcrText(
+  query: string,
+  limit = 20,
+): Promise<Array<{ id: number; title: string }>> {
+  const result = await db.execute({
+    sql: `
+      SELECT a.id, a.title
+      FROM article_ocr_fts f
+      JOIN articles a ON a.id = f.rowid
+      WHERE article_ocr_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `,
+    args: [query, limit],
+  });
+  return result.rows.map(row => ({
+    id: Number(row.id),
+    title: String(row.title),
+  }));
 }
 
 export async function updateArticles(

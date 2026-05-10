@@ -34,6 +34,9 @@ env:
   GCP_REGION:  ${{ vars.GCP_REGION }}
   TASKS_QUEUE: ${{ vars.TASKS_QUEUE }}
   GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+  GCS_PDF_BUCKET: ${{ vars.GCS_PDF_BUCKET }}
+  PDF_MODEL_TYPED: ${{ vars.PDF_MODEL_TYPED || 'gemini-2.5-flash-lite' }}
+  PDF_MODEL_HANDWRITTEN: ${{ vars.PDF_MODEL_HANDWRITTEN || 'gemini-2.5-flash-lite' }}
   ARTICLES_MAX_LIMIT: ${{ vars.ARTICLES_MAX_LIMIT || '200' }}
   # Secrets bound from GCP Secret Manager — identical for every function
   SECRETS_BINDING: >-
@@ -114,7 +117,7 @@ jobs:
             --allow-unauthenticated \
             --timeout=540s \
             --set-secrets="$SECRETS_BINDING" \
-            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET"
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET,GCS_PDF_BUCKET=$GCS_PDF_BUCKET,PDF_MODEL_TYPED=$PDF_MODEL_TYPED,PDF_MODEL_HANDWRITTEN=$PDF_MODEL_HANDWRITTEN"
 
       - name: Get summarize URL
         id: summarize
@@ -139,7 +142,7 @@ jobs:
             --allow-unauthenticated \
             --timeout=60s \
             --set-secrets="$SECRETS_BINDING" \
-            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET,SUMMARIZE_URL=${{ steps.summarize.outputs.url }}"
+            --set-env-vars="GCP_PROJECT=$GCP_PROJECT,GCP_REGION=$GCP_REGION,TASKS_QUEUE=$TASKS_QUEUE,ARTICLES_MAX_LIMIT=$ARTICLES_MAX_LIMIT,GCS_BUCKET=$GCS_BUCKET,GCS_PDF_BUCKET=$GCS_PDF_BUCKET,SUMMARIZE_URL=${{ steps.summarize.outputs.url }}"
 
       # ingest-worker must deploy before ingest so we can capture its URL
 

@@ -33,6 +33,13 @@ const envSchema = z.object({
   // GCS article cache bucket (used by summarize function)
   GCS_BUCKET: z.string().optional(),
 
+  // GCS PDF upload bucket (used by reader-api and summarize function)
+  GCS_PDF_BUCKET: z.string().optional(),
+
+  // Gemini model names for PDF processing
+  PDF_MODEL_TYPED: z.string().default('gemini-2.5-flash-lite'),
+  PDF_MODEL_HANDWRITTEN: z.string().default('gemini-2.5-flash-lite'),
+
   // Summarize function URL (used by reader-api to trigger auto-cache on save)
   SUMMARIZE_URL: z.string().url().optional(),
 });
