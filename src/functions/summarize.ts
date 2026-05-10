@@ -108,7 +108,8 @@ app.post('/articles/:id/cache', async (req, res) => {
 
 app.get('/articles/:id/cached-content', async (req, res) => {
   try {
-    const secret = req.headers['x-api-key'] as string | undefined;
+    const secret = (req.headers['x-api-key'] as string | undefined)
+      ?? (new URL(req.url, 'https://localhost').searchParams.get('secret') ?? undefined);
     if (secret !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
 
     const id = parseInt(req.params.id, 10);
