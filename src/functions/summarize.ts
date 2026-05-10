@@ -47,7 +47,22 @@ app.get('/articles/:id/summary', async (req, res) => {
 
     logger.info('Generating summary', { articleId: id, title: article.title });
 
-    const summary = await summarizeArticleFromUrl(article.url, article.title, article.notes);
+    let summary: string;
+    if (article.content_type === 'pdf') {
+      const pdfBytes = await downloadPdf(id);
+      const response = await ai.models.generateContent({
+        model: config.PDF_MODEL_TYPED,
+        contents: [{
+          parts: [
+            { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } },
+            { text: `You are an expert summariser. Write a concise 2-3 paragraph executive summary of this PDF document titled "${article.title}".${article.notes?.trim() ? `\n\nFocus on: ${article.notes.trim()}` : ''}` },
+          ],
+        }],
+      });
+      summary = response.text?.trim() ?? '';
+    } else {
+      summary = await summarizeArticleFromUrl(article.url, article.title, article.notes);
+    }
     await setAiSummary(id, summary);
     res.set('Content-Type', 'text/plain; charset=utf-8');
     return res.status(200).send(summary);
@@ -71,7 +86,36 @@ app.get('/articles/:id/describe', async (req, res) => {
 
     logger.info('Describing article', { articleId: id, title: article.title });
 
-    const result = await describeArticleFromUrl(article.url, article.title, existingTags);
+    let result: { summary: string; suggestedTag: string };
+    if (article.content_type === 'pdf') {
+      const pdfBytes = await downloadPdf(id);
+      const tagHint = existingTags.length
+        ? `Choose the single best tag from: ${JSON.stringify(existingTags)}. If none fit, invent a short lowercase hyphenated slug.`
+        : 'Invent a short lowercase hyphenated slug tag.';
+      const response = await ai.models.generateContent({
+        model: config.PDF_MODEL_TYPED,
+        contents: [{
+          parts: [
+            { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } },
+            { text: `Write a neutral 1-2 sentence description of this PDF titled "${article.title}". Then ${tagHint}` },
+          ],
+        }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              summary: { type: Type.STRING },
+              suggestedTag: { type: Type.STRING },
+            },
+            required: ['summary', 'suggestedTag'],
+          },
+        },
+      });
+      result = JSON.parse(response.text ?? '{}') as { summary: string; suggestedTag: string };
+    } else {
+      result = await describeArticleFromUrl(article.url, article.title, existingTags);
+    }
 
     await setArticleSummary(id, result.summary);
     if (!article.tags || article.tags.length === 0) {
@@ -85,7 +129,7 @@ app.get('/articles/:id/describe', async (req, res) => {
   }
 });
 
-const UNCACHEABLE_TYPES = ['video', 'podcast', 'other'];
+const UNCACHEABLE_TYPES = ['video', 'podcast', 'other', 'pdf'];
 
 app.post('/articles/:id/cache', async (req, res) => {
   try {
@@ -127,6 +171,22 @@ app.post('/articles/:id/cache', async (req, res) => {
   }
 });
 
+async function suggestAndApplyTag(id: number, title: string, summary: string, existingTags: string[]): Promise<void> {
+  try {
+    const tagHint = existingTags.length
+      ? `Choose the single best tag from this list: ${JSON.stringify(existingTags)}. If none fit, invent a short lowercase hyphenated slug.`
+      : 'Invent a short lowercase hyphenated slug tag that describes the topic.';
+    const response = await ai.models.generateContent({
+      model: config.PDF_MODEL_TYPED,
+      contents: `Article title: "${title}"\n\nSummary:\n${summary}\n\n${tagHint} Respond with only the tag, no punctuation.`,
+    });
+    const tag = response.text?.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    if (tag) await updateArticle(id, { tags: [tag] });
+  } catch (err) {
+    logger.warn('Tag suggestion failed', { articleId: id, error: String(err) });
+  }
+}
+
 app.post('/articles/:id/process-pdf', async (req, res) => {
   const secret = req.headers['x-api-key'] as string | undefined;
   if (secret !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
@@ -141,8 +201,14 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
 
   (async () => {
     try {
+      const [article, existingTags] = await Promise.all([getArticleById(id), getDistinctTags()]);
+
       if (!extract_ocr && has_summary) {
         await setPdfProcessingStatus(id, 'done');
+        // Still suggest tags if the article has none
+        if (article && (!article.tags || article.tags.length === 0) && article.summary) {
+          await suggestAndApplyTag(id, article.title, article.summary, existingTags);
+        }
         return;
       }
 
@@ -153,6 +219,8 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
       const pdfBytes = await downloadPdf(id);
       const pdfData = { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } };
 
+      let generatedSummary: string | null = null;
+
       if (extract_ocr && !has_summary) {
         const response = await ai.models.generateContent({
           model: modelName,
@@ -161,7 +229,7 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
         });
         const parsed = JSON.parse(response.text ?? '{}') as { ocr_text?: string; summary?: string };
         if (parsed.ocr_text) await setOcrText(id, parsed.ocr_text);
-        if (parsed.summary) await setArticleSummary(id, parsed.summary);
+        if (parsed.summary) { await setArticleSummary(id, parsed.summary); generatedSummary = parsed.summary; }
       } else if (extract_ocr) {
         const response = await ai.models.generateContent({
           model: modelName,
@@ -173,7 +241,11 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
           model: modelName,
           contents: [{ parts: [pdfData, { text: 'Write a 2-3 paragraph executive summary of this PDF document\'s key points.' }] }],
         });
-        if (response.text) await setArticleSummary(id, response.text.trim());
+        if (response.text) { await setArticleSummary(id, response.text.trim()); generatedSummary = response.text.trim(); }
+      }
+
+      if (article && (!article.tags || article.tags.length === 0) && generatedSummary) {
+        await suggestAndApplyTag(id, article.title, generatedSummary, existingTags);
       }
 
       await setPdfProcessingStatus(id, 'done');

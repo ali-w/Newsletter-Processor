@@ -103,7 +103,7 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
       FROM articles a
       JOIN newsletters n ON a.newsletter_id = n.id
       ${whereClause}
-      ORDER BY n.received_at DESC, a.id ASC
+      ORDER BY COALESCE(a.updated_at, a.created_at) DESC, a.id DESC
       LIMIT ?
     `,
     args
