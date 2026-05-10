@@ -91,10 +91,10 @@ app.post('/articles/:id/cache', async (req, res) => {
     logger.info('Caching article', { articleId: id, url: article.url });
 
     const html = await fetchRawHtml(article.url);
-    const dom = new JSDOM(html, { url: article.url });
+    const dom = new JSDOM(html, { url: article.url }); 
     const reader = new Readability(dom.window.document);
     const parsed = reader.parse();
-    if (!parsed) return res.status(422).json({ error: 'Could not extract article content from page' });
+    if (!parsed) return res.status(422).json({ error: 'Could not extract article content from page' }); //TODO: handle this better, maybe flag article as uncacheable? 
 
     const cleanHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>${parsed.title}</title>
