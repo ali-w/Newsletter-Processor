@@ -13,6 +13,14 @@ router.use(parseJsonBody);
 const HARD_CAP = 200;
 const DEFAULT_LIMIT = 50;
 
+const MAX_TITLE_LEN   = 500;
+const MAX_URL_LEN     = 2048;
+const MAX_SUMMARY_LEN = 10_000;
+const MAX_NOTES_LEN   = 10_000;
+const MAX_TAGS        = 20;
+const MAX_TAG_LEN     = 50;
+const VALID_CONTENT_TYPES = ['newsletter', 'article', 'video', 'podcast', 'other'];
+
 function getQueryParam(req: express.Request, name: string): string | undefined {
   return new URL(req.url, 'https://localhost').searchParams.get(name) ?? undefined;
 }
@@ -25,6 +33,17 @@ function parseLimit(req: express.Request): number {
 
 function getSecret(req: express.Request): string | undefined {
   return (req.headers['x-api-key'] as string | undefined) ?? getQueryParam(req, 'secret');
+}
+
+function validateArticleUrl(raw: string): string | null {
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch { return 'url must be a valid URL'; }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return 'url must use http or https';
+  const host = parsed.hostname.toLowerCase();
+  const blocked = /^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|::1$|0\.0\.0\.0)/.test(host)
+    || host === 'metadata.google.internal';
+  if (blocked) return 'url host is not allowed';
+  return null;
 }
 
 router.get('/rss', async (req, res) => {
@@ -68,8 +87,17 @@ router.patch('/articles/:id', async (req, res) => {
   if (notes !== undefined && typeof notes !== 'string') {
     return res.status(400).json({ error: 'notes must be a string' });
   }
+  if (notes !== undefined && notes.length > MAX_NOTES_LEN) {
+    return res.status(400).json({ error: `notes must be ${MAX_NOTES_LEN} characters or fewer` });
+  }
   if ('tags' in req.body && (!Array.isArray(tags) || tags.some((t: unknown) => typeof t !== 'string'))) {
     return res.status(400).json({ error: 'tags must be an array of strings' });
+  }
+  if ('tags' in req.body && Array.isArray(tags) && tags.length > MAX_TAGS) {
+    return res.status(400).json({ error: `tags must contain ${MAX_TAGS} items or fewer` });
+  }
+  if ('tags' in req.body && Array.isArray(tags) && tags.some((t: string) => t.length > MAX_TAG_LEN)) {
+    return res.status(400).json({ error: `each tag must be ${MAX_TAG_LEN} characters or fewer` });
   }
   if ('saved' in req.body && typeof saved !== 'boolean') {
     return res.status(400).json({ error: 'saved must be a boolean' });
@@ -98,12 +126,21 @@ router.post('/articles', async (req, res) => {
   const { title, url, summary, tags, content_type, saved } = req.body ?? {};
 
   if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title is required and must be a string' });
+  if (title.length > MAX_TITLE_LEN) return res.status(400).json({ error: `title must be ${MAX_TITLE_LEN} characters or fewer` });
   if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url is required and must be a string' });
+  if (url.length > MAX_URL_LEN) return res.status(400).json({ error: `url must be ${MAX_URL_LEN} characters or fewer` });
+  const urlError = validateArticleUrl(url);
+  if (urlError) return res.status(400).json({ error: urlError });
   if (summary !== undefined && typeof summary !== 'string') return res.status(400).json({ error: 'summary must be a string' });
+  if (summary !== undefined && summary.length > MAX_SUMMARY_LEN) return res.status(400).json({ error: `summary must be ${MAX_SUMMARY_LEN} characters or fewer` });
   if (tags !== undefined && (!Array.isArray(tags) || tags.some((t: unknown) => typeof t !== 'string'))) {
     return res.status(400).json({ error: 'tags must be an array of strings' });
   }
-  if (content_type !== undefined && typeof content_type !== 'string') return res.status(400).json({ error: 'content_type must be a string' });
+  if (tags !== undefined && tags.length > MAX_TAGS) return res.status(400).json({ error: `tags must contain ${MAX_TAGS} items or fewer` });
+  if (tags !== undefined && tags.some((t: string) => t.length > MAX_TAG_LEN)) return res.status(400).json({ error: `each tag must be ${MAX_TAG_LEN} characters or fewer` });
+  if (content_type !== undefined && !VALID_CONTENT_TYPES.includes(content_type)) {
+    return res.status(400).json({ error: `content_type must be one of: ${VALID_CONTENT_TYPES.join(', ')}` });
+  }
   if (saved !== undefined && typeof saved !== 'boolean') return res.status(400).json({ error: 'saved must be a boolean' });
 
   try {
@@ -126,8 +163,11 @@ router.post('/articles/updates', async (req, res) => {
     const patch: ArticlePatch = {};
     if (status !== undefined && ['unread', 'read', 'skipped'].includes(status)) patch.status = status;
     if ('rating' in item) patch.rating = (Number.isInteger(rating) && rating >= 1 && rating <= 5) ? rating : null;
-    if (typeof notes === 'string') patch.notes = notes;
-    if (Array.isArray(item.tags)) patch.tags = item.tags.filter((t: unknown) => typeof t === 'string');
+    if (typeof notes === 'string' && notes.length <= MAX_NOTES_LEN) patch.notes = notes;
+    if (Array.isArray(item.tags)) {
+      const validTags = item.tags.filter((t: unknown) => typeof t === 'string' && (t as string).length <= MAX_TAG_LEN);
+      if (validTags.length <= MAX_TAGS) patch.tags = validTags;
+    }
     if (typeof item.saved === 'boolean') patch.saved = item.saved;
     updates.push({ id, ...patch });
   }
