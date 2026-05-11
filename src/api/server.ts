@@ -151,8 +151,8 @@ app.patch('/articles/:id', async (req, res) => {
 
   const { status, rating, notes } = req.body;
 
-  if (status !== undefined && !['unread', 'read', 'skipped'].includes(status)) {
-    return res.status(400).json({ error: 'status must be "unread", "read", or "skipped"' });
+  if (status !== undefined && !['unread', 'read', 'skipped', 'later'].includes(status)) {
+    return res.status(400).json({ error: 'status must be "unread", "read", "skipped", or "later"' });
   }
   if ('rating' in req.body && rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
     return res.status(400).json({ error: 'rating must be an integer 1–5, or null' });
@@ -189,7 +189,7 @@ app.post('/articles/updates', async (req, res) => {
     if (!Number.isInteger(id) || id <= 0) continue;
 
     const patch: ArticlePatch = {};
-    if (status !== undefined && ['unread', 'read', 'skipped'].includes(status)) patch.status = status;
+    if (status !== undefined && ['unread', 'read', 'skipped', 'later'].includes(status)) patch.status = status;
     if ('rating' in item) patch.rating = (Number.isInteger(rating) && rating >= 1 && rating <= 5) ? rating : null;
     if (typeof notes === 'string') patch.notes = notes;
 

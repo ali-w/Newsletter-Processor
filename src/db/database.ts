@@ -14,7 +14,7 @@ export interface Article {
   summary: string;
   url: string;
   created_at?: string;
-  status?: 'unread' | 'read' | 'skipped';
+  status?: 'unread' | 'read' | 'skipped' | 'later';
   rating?: number | null;
   notes?: string;
   updated_at?: string | null;
@@ -37,7 +37,8 @@ export interface ArticleRow extends Omit<Article, 'id'> {
 }
 
 export interface ArticlePatch {
-  status?: 'unread' | 'read' | 'skipped';
+  title?: string;
+  status?: 'unread' | 'read' | 'skipped' | 'later';
   rating?: number | null;
   notes?: string;
   tags?: string[];
@@ -154,6 +155,10 @@ export async function updateArticle(id: number, patch: ArticlePatch): Promise<st
   const sets: string[] = ['updated_at = ?'];
   const args: (string | number | null)[] = [now];
 
+  if (patch.title !== undefined) {
+    sets.push('title = ?');
+    args.push(patch.title);
+  }
   if (patch.status !== undefined) {
     sets.push('status = ?');
     args.push(patch.status);

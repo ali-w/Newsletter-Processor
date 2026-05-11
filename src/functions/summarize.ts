@@ -15,13 +15,16 @@ app.use(parseJsonBody);
 
 const ai = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });
 
-const pdfOcrAndSummarySchema: Schema = {
+// ocr_text is only populated when the prompt requests it; title/tag only used when has_title is false.
+const pdfMetadataSchema: Schema = {
   type: Type.OBJECT,
   properties: {
+    title: { type: Type.STRING, description: 'A concise descriptive title for the document' },
     ocr_text: { type: Type.STRING, description: 'All text extracted verbatim from the PDF' },
-    summary: { type: Type.STRING, description: 'A 2–3 paragraph executive summary of the PDF' },
+    summary: { type: Type.STRING, description: 'A single paragraph summary of the PDF' },
+    tag: { type: Type.STRING, description: 'A single short lowercase hyphenated slug describing the topic' },
   },
-  required: ['ocr_text', 'summary'],
+  required: ['summary'],
 };
 
 async function uploadPdfToGemini(pdfBytes: Buffer): Promise<string> {
@@ -182,7 +185,7 @@ app.post('/articles/:id/cache', async (req, res) => {
   }
 });
 
-async function suggestAndApplyTag(id: number, title: string, summary: string, existingTags: string[]): Promise<void> {
+async function suggestAndApplyTag(id: number, title: string, summary: string, existingTags: string[], currentTags: string[] = []): Promise<void> {
   try {
     const tagHint = existingTags.length
       ? `Here are existing tags used in the system: ${JSON.stringify(existingTags)}. If one is a strong and specific match for this article's topic, use it. Otherwise invent a new short lowercase hyphenated slug that precisely describes the topic.`
@@ -192,7 +195,9 @@ async function suggestAndApplyTag(id: number, title: string, summary: string, ex
       contents: `Article title: "${title}"\n\nSummary:\n${summary}\n\n${tagHint} Respond with only the tag, nothing else.`,
     });
     const tag = response.text?.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    if (tag) await updateArticle(id, { tags: [tag] });
+    if (tag && !currentTags.includes(tag)) {
+      await updateArticle(id, { tags: [...currentTags, tag] });
+    }
   } catch (err) {
     logger.warn('Tag suggestion failed', { articleId: id, error: String(err) });
   }
@@ -205,28 +210,64 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid article ID' });
 
-  const { pdf_type, extract_ocr, has_summary } = req.body ?? {};
-  logger.info('process-pdf request received', { articleId: id, pdf_type, extract_ocr, has_summary });
+  const { pdf_type, extract_ocr, has_summary, has_title } = req.body ?? {};
+  logger.info('process-pdf request received', { articleId: id, pdf_type, extract_ocr, has_summary, has_title });
 
   try {
     const [article, existingTags] = await Promise.all([getArticleById(id), getDistinctTags()]);
-    logger.info('Article loaded', { articleId: id, title: article?.title, extract_ocr, has_summary });
+    logger.info('Article loaded', { articleId: id, title: article?.title, extract_ocr, has_summary, has_title });
+
+    const autoTag = pdf_type === 'handwritten' ? 'notes' : 'document';
+    const userSubmittedNoTags = !article || !article.tags || article.tags.length === 0 ||
+      (article.tags.length === 1 && article.tags[0] === autoTag);
+
+    const modelName = pdf_type === 'handwritten'
+      ? config.PDF_MODEL_HANDWRITTEN
+      : config.PDF_MODEL_TYPED;
+
+    // No title supplied — one Gemini call generates title + summary + tag (+ OCR if requested).
+    if (!has_title) {
+      logger.info('Downloading PDF from GCS (auto-metadata)', { articleId: id });
+      const pdfBytes = await downloadPdf(id);
+      const fileUri = await uploadPdfToGemini(pdfBytes);
+      const pdfData = { fileData: { mimeType: 'application/pdf', fileUri } };
+      const tagHint = existingTags.length
+        ? ` For the tag, prefer an existing tag if it strongly matches: ${JSON.stringify(existingTags)}. Otherwise invent a new slug.`
+        : '';
+      const prompt = extract_ocr
+        ? `Extract all text verbatim from this PDF (ocr_text). Also generate a concise title, a single paragraph summary, and a short lowercase hyphenated topic tag.${tagHint}`
+        : `Generate a concise title, a single paragraph summary, and a short lowercase hyphenated topic tag for this PDF.${tagHint}`;
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ parts: [pdfData, { text: prompt }] }],
+        config: { responseMimeType: 'application/json', responseSchema: pdfMetadataSchema },
+      });
+      const parsed = JSON.parse(response.text ?? '{}') as { title?: string; ocr_text?: string; summary?: string; tag?: string };
+      const metaPatch: { title?: string; tags?: string[] } = {};
+      if (parsed.title) metaPatch.title = parsed.title;
+      if (parsed.tag) {
+        const cleanTag = parsed.tag.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        if (cleanTag) metaPatch.tags = [...(article?.tags ?? []), cleanTag];
+      }
+      if (Object.keys(metaPatch).length > 0) await updateArticle(id, metaPatch);
+      if (parsed.ocr_text) { await setOcrText(id, parsed.ocr_text); logger.info('OCR text saved', { articleId: id, ocrLength: parsed.ocr_text.length }); }
+      if (parsed.summary) { await setArticleSummary(id, parsed.summary); logger.info('Summary saved', { articleId: id }); }
+      await setPdfProcessingStatus(id, 'done');
+      logger.info('PDF processing complete (auto-metadata)', { articleId: id });
+      return res.status(200).json({ ok: true });
+    }
 
     if (!extract_ocr && has_summary) {
       logger.info('No Gemini processing needed — has summary, OCR not requested', { articleId: id });
       await setPdfProcessingStatus(id, 'done');
-      if (article && (!article.tags || article.tags.length === 0) && article.summary) {
+      if (article && userSubmittedNoTags && article.summary) {
         logger.info('Suggesting tag from existing summary', { articleId: id });
-        await suggestAndApplyTag(id, article.title, article.summary, existingTags);
+        await suggestAndApplyTag(id, article.title, article.summary, existingTags, article.tags ?? []);
         logger.info('Tag suggestion complete', { articleId: id });
       }
       logger.info('PDF processing complete (no Gemini)', { articleId: id });
       return res.status(200).json({ ok: true });
     }
-
-    const modelName = pdf_type === 'handwritten'
-      ? config.PDF_MODEL_HANDWRITTEN
-      : config.PDF_MODEL_TYPED;
 
     logger.info('Downloading PDF from GCS', { articleId: id });
     const pdfBytes = await downloadPdf(id);
@@ -242,7 +283,7 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
       const response = await ai.models.generateContent({
         model: modelName,
         contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF. Also write a 2-3 paragraph executive summary of its key points.' }] }],
-        config: { responseMimeType: 'application/json', responseSchema: pdfOcrAndSummarySchema },
+        config: { responseMimeType: 'application/json', responseSchema: pdfMetadataSchema },
       });
       const parsed = JSON.parse(response.text ?? '{}') as { ocr_text?: string; summary?: string };
       if (parsed.ocr_text) { await setOcrText(id, parsed.ocr_text); logger.info('OCR text saved', { articleId: id, ocrLength: parsed.ocr_text.length }); }
@@ -263,9 +304,9 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
       if (response.text) { await setArticleSummary(id, response.text.trim()); generatedSummary = response.text.trim(); logger.info('Summary saved', { articleId: id, summaryLength: response.text.length }); }
     }
 
-    if (article && (!article.tags || article.tags.length === 0) && generatedSummary) {
+    if (article && userSubmittedNoTags && generatedSummary) {
       logger.info('Suggesting tag from generated summary', { articleId: id });
-      await suggestAndApplyTag(id, article.title, generatedSummary, existingTags);
+      await suggestAndApplyTag(id, article.title, generatedSummary, existingTags, article.tags ?? []);
       logger.info('Tag suggestion complete', { articleId: id });
     }
 

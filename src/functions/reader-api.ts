@@ -128,8 +128,8 @@ router.patch('/articles/:id', async (req, res) => {
 
   const { status, rating, notes, tags, saved } = req.body;
 
-  if (status !== undefined && !['unread', 'read', 'skipped'].includes(status)) {
-    return res.status(400).json({ error: 'status must be "unread", "read", or "skipped"' });
+  if (status !== undefined && !['unread', 'read', 'skipped', 'later'].includes(status)) {
+    return res.status(400).json({ error: 'status must be "unread", "read", "skipped", or "later"' });
   }
   if ('rating' in req.body && rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
     return res.status(400).json({ error: 'rating must be an integer 1–5, or null' });
@@ -187,8 +187,8 @@ router.post('/articles/upload-pdf', async (req, res) => {
 
   const { title, pdf_type, extract_ocr, tags, summary, saved } = req.body ?? {};
 
-  if (!title || typeof title !== 'string') return res.status(400).json({ error: 'title is required' });
-  if (title.length > MAX_TITLE_LEN) return res.status(400).json({ error: `title must be ${MAX_TITLE_LEN} characters or fewer` });
+  if (title !== undefined && typeof title !== 'string') return res.status(400).json({ error: 'title must be a string' });
+  if (title !== undefined && title.length > MAX_TITLE_LEN) return res.status(400).json({ error: `title must be ${MAX_TITLE_LEN} characters or fewer` });
   if (!['typed', 'handwritten'].includes(pdf_type)) {
     return res.status(400).json({ error: 'pdf_type must be "typed" or "handwritten"' });
   }
@@ -201,11 +201,15 @@ router.post('/articles/upload-pdf', async (req, res) => {
   if (summary !== undefined && summary.length > MAX_SUMMARY_LEN) return res.status(400).json({ error: `summary must be ${MAX_SUMMARY_LEN} characters or fewer` });
 
   try {
+    const autoTag = pdf_type === 'handwritten' ? 'notes' : 'document';
+    const mergedTags = [autoTag, ...(tags ?? []).filter((t: string) => t !== autoTag)];
+    const hasTitle = !!title;
+
     const article = await createManualArticle({
-      title,
+      title: title ?? 'Untitled',
       url: 'gs://pending',
       summary: summary ?? '',
-      tags,
+      tags: mergedTags,
       content_type: 'pdf',
       saved: saved !== false,
       pdf_type,
@@ -220,7 +224,7 @@ router.post('/articles/upload-pdf', async (req, res) => {
 
     const uploadUrl = await generateSignedPutUrl(id);
 
-    return res.status(201).json({ id, upload_url: uploadUrl, gcs_uri: gcsUri });
+    return res.status(201).json({ id, upload_url: uploadUrl, gcs_uri: gcsUri, has_title: hasTitle });
   } catch (err) {
     logger.error('Error creating PDF article', { error: String(err) });
     return res.status(500).json({ error: 'Internal Server Error' });
@@ -283,7 +287,7 @@ router.post('/articles/updates', async (req, res) => {
     const { id, status, rating, notes } = item;
     if (!Number.isInteger(id) || id <= 0) continue;
     const patch: ArticlePatch = {};
-    if (status !== undefined && ['unread', 'read', 'skipped'].includes(status)) patch.status = status;
+    if (status !== undefined && ['unread', 'read', 'skipped', 'later'].includes(status)) patch.status = status;
     if ('rating' in item) patch.rating = (Number.isInteger(rating) && rating >= 1 && rating <= 5) ? rating : null;
     if (typeof notes === 'string' && notes.length <= MAX_NOTES_LEN) patch.notes = notes;
     if (Array.isArray(item.tags)) {
