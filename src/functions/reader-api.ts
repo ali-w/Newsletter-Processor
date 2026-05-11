@@ -344,6 +344,7 @@ router.post('/articles/:id/confirm-upload', async (req, res) => {
       gcs_uri: gcsUri,
       extract_ocr: article.extract_ocr,
       has_summary: !!(article.summary),
+      has_title: article.title !== 'Untitled',
     };
     const task = {
       httpRequest: {
