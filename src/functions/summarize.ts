@@ -101,8 +101,8 @@ app.get('/articles/:id/describe', async (req, res) => {
       const pdfBytes = await downloadPdf(id);
       const fileUri = await uploadPdfToGemini(pdfBytes);
       const tagHint = existingTags.length
-        ? `Choose the single best tag from: ${JSON.stringify(existingTags)}. If none fit, invent a short lowercase hyphenated slug.`
-        : 'Invent a short lowercase hyphenated slug tag.';
+        ? `Here are existing tags used in the system: ${JSON.stringify(existingTags)}. If one is a strong and specific match for this article's topic, use it. Otherwise invent a new short lowercase hyphenated slug that precisely describes the topic.`
+        : 'Invent a short lowercase hyphenated slug tag that precisely describes the topic.';
       const response = await ai.models.generateContent({
         model: config.PDF_MODEL_TYPED,
         contents: [{
@@ -185,11 +185,11 @@ app.post('/articles/:id/cache', async (req, res) => {
 async function suggestAndApplyTag(id: number, title: string, summary: string, existingTags: string[]): Promise<void> {
   try {
     const tagHint = existingTags.length
-      ? `Choose the single best tag from this list: ${JSON.stringify(existingTags)}. If none fit, invent a short lowercase hyphenated slug.`
-      : 'Invent a short lowercase hyphenated slug tag that describes the topic.';
+      ? `Here are existing tags used in the system: ${JSON.stringify(existingTags)}. If one is a strong and specific match for this article's topic, use it. Otherwise invent a new short lowercase hyphenated slug that precisely describes the topic.`
+      : 'Invent a short lowercase hyphenated slug tag that precisely describes the topic.';
     const response = await ai.models.generateContent({
       model: config.PDF_MODEL_TYPED,
-      contents: `Article title: "${title}"\n\nSummary:\n${summary}\n\n${tagHint} Respond with only the tag, no punctuation.`,
+      contents: `Article title: "${title}"\n\nSummary:\n${summary}\n\n${tagHint} Respond with only the tag, nothing else.`,
     });
     const tag = response.text?.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (tag) await updateArticle(id, { tags: [tag] });
@@ -206,15 +206,21 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
   if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid article ID' });
 
   const { pdf_type, extract_ocr, has_summary } = req.body ?? {};
+  logger.info('process-pdf request received', { articleId: id, pdf_type, extract_ocr, has_summary });
 
   try {
     const [article, existingTags] = await Promise.all([getArticleById(id), getDistinctTags()]);
+    logger.info('Article loaded', { articleId: id, title: article?.title, extract_ocr, has_summary });
 
     if (!extract_ocr && has_summary) {
+      logger.info('No Gemini processing needed — has summary, OCR not requested', { articleId: id });
       await setPdfProcessingStatus(id, 'done');
       if (article && (!article.tags || article.tags.length === 0) && article.summary) {
+        logger.info('Suggesting tag from existing summary', { articleId: id });
         await suggestAndApplyTag(id, article.title, article.summary, existingTags);
+        logger.info('Tag suggestion complete', { articleId: id });
       }
+      logger.info('PDF processing complete (no Gemini)', { articleId: id });
       return res.status(200).json({ ok: true });
     }
 
@@ -226,40 +232,45 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
     const pdfBytes = await downloadPdf(id);
     logger.info('PDF downloaded, uploading to Gemini Files API', { articleId: id, sizeBytes: pdfBytes.length, model: modelName });
     const fileUri = await uploadPdfToGemini(pdfBytes);
-    logger.info('PDF uploaded to Gemini, generating content', { articleId: id });
+    logger.info('PDF uploaded to Gemini Files API, calling generateContent', { articleId: id, fileUri });
     const pdfData = { fileData: { mimeType: 'application/pdf', fileUri } };
 
     let generatedSummary: string | null = null;
 
     if (extract_ocr && !has_summary) {
+      logger.info('Extracting OCR text and generating summary', { articleId: id });
       const response = await ai.models.generateContent({
         model: modelName,
         contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF. Also write a 2-3 paragraph executive summary of its key points.' }] }],
         config: { responseMimeType: 'application/json', responseSchema: pdfOcrAndSummarySchema },
       });
       const parsed = JSON.parse(response.text ?? '{}') as { ocr_text?: string; summary?: string };
-      if (parsed.ocr_text) await setOcrText(id, parsed.ocr_text);
-      if (parsed.summary) { await setArticleSummary(id, parsed.summary); generatedSummary = parsed.summary; }
+      if (parsed.ocr_text) { await setOcrText(id, parsed.ocr_text); logger.info('OCR text saved', { articleId: id, ocrLength: parsed.ocr_text.length }); }
+      if (parsed.summary) { await setArticleSummary(id, parsed.summary); generatedSummary = parsed.summary; logger.info('Summary saved', { articleId: id, summaryLength: parsed.summary.length }); }
     } else if (extract_ocr) {
+      logger.info('Extracting OCR text only', { articleId: id });
       const response = await ai.models.generateContent({
         model: modelName,
         contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF.' }] }],
       });
-      if (response.text) await setOcrText(id, response.text.trim());
+      if (response.text) { await setOcrText(id, response.text.trim()); logger.info('OCR text saved', { articleId: id, ocrLength: response.text.length }); }
     } else {
+      logger.info('Generating summary only', { articleId: id });
       const response = await ai.models.generateContent({
         model: modelName,
         contents: [{ parts: [pdfData, { text: 'Write a 2-3 paragraph executive summary of this PDF document\'s key points.' }] }],
       });
-      if (response.text) { await setArticleSummary(id, response.text.trim()); generatedSummary = response.text.trim(); }
+      if (response.text) { await setArticleSummary(id, response.text.trim()); generatedSummary = response.text.trim(); logger.info('Summary saved', { articleId: id, summaryLength: response.text.length }); }
     }
 
     if (article && (!article.tags || article.tags.length === 0) && generatedSummary) {
+      logger.info('Suggesting tag from generated summary', { articleId: id });
       await suggestAndApplyTag(id, article.title, generatedSummary, existingTags);
+      logger.info('Tag suggestion complete', { articleId: id });
     }
 
     await setPdfProcessingStatus(id, 'done');
-    logger.info('PDF processed', { articleId: id });
+    logger.info('PDF processing complete', { articleId: id });
     return res.status(200).json({ ok: true });
   } catch (err) {
     logger.error('PDF processing failed', { articleId: id, error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined, cause: err instanceof Error && err.cause ? String(err.cause) : undefined });
