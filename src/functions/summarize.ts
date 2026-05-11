@@ -24,6 +24,15 @@ const pdfOcrAndSummarySchema: Schema = {
   required: ['ocr_text', 'summary'],
 };
 
+async function uploadPdfToGemini(pdfBytes: Buffer): Promise<string> {
+  const ab = new ArrayBuffer(pdfBytes.byteLength);
+  new Uint8Array(ab).set(pdfBytes);
+  const blob = new Blob([ab], { type: 'application/pdf' });
+  const file = await ai.files.upload({ file: blob, config: { mimeType: 'application/pdf' } });
+  if (!file.uri) throw new Error('Gemini Files API returned no URI');
+  return file.uri;
+}
+
 app.use((_req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -50,11 +59,12 @@ app.get('/articles/:id/summary', async (req, res) => {
     let summary: string;
     if (article.content_type === 'pdf') {
       const pdfBytes = await downloadPdf(id);
+      const fileUri = await uploadPdfToGemini(pdfBytes);
       const response = await ai.models.generateContent({
         model: config.PDF_MODEL_TYPED,
         contents: [{
           parts: [
-            { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } },
+            { fileData: { mimeType: 'application/pdf', fileUri } },
             { text: `You are an expert summariser. Write a concise 2-3 paragraph executive summary of this PDF document titled "${article.title}".${article.notes?.trim() ? `\n\nFocus on: ${article.notes.trim()}` : ''}` },
           ],
         }],
@@ -89,6 +99,7 @@ app.get('/articles/:id/describe', async (req, res) => {
     let result: { summary: string; suggestedTag: string };
     if (article.content_type === 'pdf') {
       const pdfBytes = await downloadPdf(id);
+      const fileUri = await uploadPdfToGemini(pdfBytes);
       const tagHint = existingTags.length
         ? `Choose the single best tag from: ${JSON.stringify(existingTags)}. If none fit, invent a short lowercase hyphenated slug.`
         : 'Invent a short lowercase hyphenated slug tag.';
@@ -96,7 +107,7 @@ app.get('/articles/:id/describe', async (req, res) => {
         model: config.PDF_MODEL_TYPED,
         contents: [{
           parts: [
-            { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } },
+            { fileData: { mimeType: 'application/pdf', fileUri } },
             { text: `Write a neutral 1-2 sentence description of this PDF titled "${article.title}". Then ${tagHint}` },
           ],
         }],
@@ -196,65 +207,65 @@ app.post('/articles/:id/process-pdf', async (req, res) => {
 
   const { pdf_type, extract_ocr, has_summary } = req.body ?? {};
 
-  // Respond immediately — Cloud Tasks will retry on non-2xx; background work updates DB directly.
-  res.status(202).json({ ok: true });
+  try {
+    const [article, existingTags] = await Promise.all([getArticleById(id), getDistinctTags()]);
 
-  (async () => {
-    try {
-      const [article, existingTags] = await Promise.all([getArticleById(id), getDistinctTags()]);
-
-      if (!extract_ocr && has_summary) {
-        await setPdfProcessingStatus(id, 'done');
-        // Still suggest tags if the article has none
-        if (article && (!article.tags || article.tags.length === 0) && article.summary) {
-          await suggestAndApplyTag(id, article.title, article.summary, existingTags);
-        }
-        return;
-      }
-
-      const modelName = pdf_type === 'handwritten'
-        ? config.PDF_MODEL_HANDWRITTEN
-        : config.PDF_MODEL_TYPED;
-
-      const pdfBytes = await downloadPdf(id);
-      const pdfData = { inlineData: { mimeType: 'application/pdf', data: pdfBytes.toString('base64') } };
-
-      let generatedSummary: string | null = null;
-
-      if (extract_ocr && !has_summary) {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF. Also write a 2-3 paragraph executive summary of its key points.' }] }],
-          config: { responseMimeType: 'application/json', responseSchema: pdfOcrAndSummarySchema },
-        });
-        const parsed = JSON.parse(response.text ?? '{}') as { ocr_text?: string; summary?: string };
-        if (parsed.ocr_text) await setOcrText(id, parsed.ocr_text);
-        if (parsed.summary) { await setArticleSummary(id, parsed.summary); generatedSummary = parsed.summary; }
-      } else if (extract_ocr) {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF.' }] }],
-        });
-        if (response.text) await setOcrText(id, response.text.trim());
-      } else {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [{ parts: [pdfData, { text: 'Write a 2-3 paragraph executive summary of this PDF document\'s key points.' }] }],
-        });
-        if (response.text) { await setArticleSummary(id, response.text.trim()); generatedSummary = response.text.trim(); }
-      }
-
-      if (article && (!article.tags || article.tags.length === 0) && generatedSummary) {
-        await suggestAndApplyTag(id, article.title, generatedSummary, existingTags);
-      }
-
+    if (!extract_ocr && has_summary) {
       await setPdfProcessingStatus(id, 'done');
-      logger.info('PDF processed', { articleId: id });
-    } catch (err) {
-      logger.error('PDF processing failed', { articleId: id, error: err instanceof Error ? err.message : String(err) });
-      await setPdfProcessingStatus(id, 'error').catch(() => {});
+      if (article && (!article.tags || article.tags.length === 0) && article.summary) {
+        await suggestAndApplyTag(id, article.title, article.summary, existingTags);
+      }
+      return res.status(200).json({ ok: true });
     }
-  })();
+
+    const modelName = pdf_type === 'handwritten'
+      ? config.PDF_MODEL_HANDWRITTEN
+      : config.PDF_MODEL_TYPED;
+
+    logger.info('Downloading PDF from GCS', { articleId: id });
+    const pdfBytes = await downloadPdf(id);
+    logger.info('PDF downloaded, uploading to Gemini Files API', { articleId: id, sizeBytes: pdfBytes.length, model: modelName });
+    const fileUri = await uploadPdfToGemini(pdfBytes);
+    logger.info('PDF uploaded to Gemini, generating content', { articleId: id });
+    const pdfData = { fileData: { mimeType: 'application/pdf', fileUri } };
+
+    let generatedSummary: string | null = null;
+
+    if (extract_ocr && !has_summary) {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF. Also write a 2-3 paragraph executive summary of its key points.' }] }],
+        config: { responseMimeType: 'application/json', responseSchema: pdfOcrAndSummarySchema },
+      });
+      const parsed = JSON.parse(response.text ?? '{}') as { ocr_text?: string; summary?: string };
+      if (parsed.ocr_text) await setOcrText(id, parsed.ocr_text);
+      if (parsed.summary) { await setArticleSummary(id, parsed.summary); generatedSummary = parsed.summary; }
+    } else if (extract_ocr) {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ parts: [pdfData, { text: 'Extract all text verbatim from this PDF.' }] }],
+      });
+      if (response.text) await setOcrText(id, response.text.trim());
+    } else {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [{ parts: [pdfData, { text: 'Write a 2-3 paragraph executive summary of this PDF document\'s key points.' }] }],
+      });
+      if (response.text) { await setArticleSummary(id, response.text.trim()); generatedSummary = response.text.trim(); }
+    }
+
+    if (article && (!article.tags || article.tags.length === 0) && generatedSummary) {
+      await suggestAndApplyTag(id, article.title, generatedSummary, existingTags);
+    }
+
+    await setPdfProcessingStatus(id, 'done');
+    logger.info('PDF processed', { articleId: id });
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    logger.error('PDF processing failed', { articleId: id, error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined, cause: err instanceof Error && err.cause ? String(err.cause) : undefined });
+    await setPdfProcessingStatus(id, 'error').catch(() => {});
+    return res.status(500).json({ error: 'PDF processing failed' });
+  }
 });
 
 app.get('/articles/:id/cached-content', async (req, res) => {

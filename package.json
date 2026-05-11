@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "migrate": "ts-node src/db/migrate.ts",
+    "reset-data": "ts-node src/db/reset.ts",
     "test": "jest --config jest.config.js",
     "test:functions": "jest --config jest.functions.config.js",
     "test:all": "npm test && npm run test:functions"
