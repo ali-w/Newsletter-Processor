@@ -22,7 +22,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const HARD_CAP = 200;
+const HARD_CAP = 2000;
 const DEFAULT_LIMIT = 50;
 
 function parseLimit(raw: unknown): number {

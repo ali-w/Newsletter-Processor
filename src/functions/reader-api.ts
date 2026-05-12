@@ -25,7 +25,7 @@ router.use(parseJsonBody);
 
 const tasksClient = new CloudTasksClient({ fallback: true });
 
-const HARD_CAP = 200;
+const HARD_CAP = 2000;
 const DEFAULT_LIMIT = 50;
 
 const MAX_TITLE_LEN   = 500;
