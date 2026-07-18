@@ -22,8 +22,13 @@ app.post('/', async (req, res) => {
   res.status(200).json({ status: 'processing' });
 
   const payload = req.body;
-  const senderEmail = (payload.envelope?.from ?? '').toLowerCase().trim();
-  const senderName = payload.headers?.From || senderEmail || 'Unknown Sender';
+  // headers.From is "Display Name <email>" — more stable than envelope.from which is a garbled bounce address
+  const rawFrom = String(payload.headers?.From ?? payload.envelope?.from ?? '');
+  const angleMatch = rawFrom.match(/<([^>]+)>/);
+  const senderEmail = (angleMatch ? angleMatch[1] : rawFrom).toLowerCase().trim();
+  const senderName = angleMatch
+    ? rawFrom.replace(/<[^>]+>/, '').trim().replace(/^"|"$/g, '').trim() || senderEmail
+    : senderEmail || 'Unknown Sender';
   const receivedAtStr = payload.headers?.Date;
   const receivedAt = receivedAtStr ? new Date(receivedAtStr) : new Date();
   const content = payload.html || payload.plain || '';
