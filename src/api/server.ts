@@ -84,7 +84,8 @@ app.post('/webhook/cloudmailin', async (req, res) => {
     }
 
     const payload = req.body;
-    const senderName = payload.envelope?.from || payload.headers?.From || 'Unknown Sender';
+    const senderEmail = (payload.envelope?.from ?? '').toLowerCase().trim();
+    const senderName = payload.headers?.From || senderEmail || 'Unknown Sender';
     const receivedAtStr = payload.headers?.Date;
     const receivedAt = receivedAtStr ? new Date(receivedAtStr) : new Date();
     const content = payload.html || payload.plain || '';
@@ -124,7 +125,7 @@ app.post('/webhook/cloudmailin', async (req, res) => {
       return res.status(200).json({ status: 'success', message: 'No articles found' });
     }
 
-    const newsletterId = await insertNewsletter(senderName, receivedAt);
+    const newsletterId = await insertNewsletter(senderName, senderEmail, receivedAt);
     for (const article of articles) {
       await insertArticle(newsletterId, article);
     }

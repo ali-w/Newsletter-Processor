@@ -29,6 +29,7 @@ async function migrate() {
   // Idempotent column additions for databases that pre-date the annotation columns.
   // SQLite has no ADD COLUMN IF NOT EXISTS, so we suppress the duplicate-column error.
   const alterations = [
+    `ALTER TABLE newsletters ADD COLUMN sender_email TEXT`,
     `ALTER TABLE articles ADD COLUMN status TEXT NOT NULL DEFAULT 'unread'`,
     `ALTER TABLE articles ADD COLUMN rating INTEGER`,
     `ALTER TABLE articles ADD COLUMN notes TEXT NOT NULL DEFAULT ''`,
@@ -51,6 +52,15 @@ async function migrate() {
       if (!String(e?.message).includes('duplicate column')) throw e;
     }
   }
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS email_tag_mappings (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      email      TEXT NOT NULL UNIQUE,
+      tag        TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS article_ocr (

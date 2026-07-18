@@ -4,7 +4,7 @@ import { MessageClient } from 'cloudmailin';
 import { config } from '../config';
 import { logger } from '../logger';
 import { extractArticles } from '../llm/parser';
-import { insertNewsletter, insertArticle } from '../db/database';
+import { insertNewsletter, insertArticle, getTagForEmail } from '../db/database';
 import { parseJsonBody } from './parseBody';
 
 const app = express();
@@ -22,7 +22,8 @@ app.post('/', async (req, res) => {
   res.status(200).json({ status: 'processing' });
 
   const payload = req.body;
-  const senderName = payload.envelope?.from || payload.headers?.From || 'Unknown Sender';
+  const senderEmail = (payload.envelope?.from ?? '').toLowerCase().trim();
+  const senderName = payload.headers?.From || senderEmail || 'Unknown Sender';
   const receivedAtStr = payload.headers?.Date;
   const receivedAt = receivedAtStr ? new Date(receivedAtStr) : new Date();
   const content = payload.html || payload.plain || '';
@@ -61,9 +62,11 @@ app.post('/', async (req, res) => {
       return;
     }
 
-    const newsletterId = await insertNewsletter(senderName, receivedAt);
+    const newsletterId = await insertNewsletter(senderName, senderEmail, receivedAt);
+    const autoTag = senderEmail ? await getTagForEmail(senderEmail) : null;
     for (const article of articles) {
-      await insertArticle(newsletterId, article);
+      const tags = autoTag ? [autoTag] : [];
+      await insertArticle(newsletterId, { ...article, tags });
     }
 
     logger.info('Saved articles from newsletter', { sender: senderName, count: articles.length });

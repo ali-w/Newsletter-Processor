@@ -14,6 +14,9 @@ import {
   setCachedContent,
   setPdfProcessingStatus,
   searchByOcrText,
+  getAllEmailTagMappings,
+  upsertEmailTagMapping,
+  deleteEmailTagMapping,
   ArticlePatch,
 } from '../db/database';
 import { generateRssFeed } from '../rss/generator';
@@ -413,6 +416,69 @@ router.delete('/articles/:id', async (req, res) => {
     return res.status(204).end();
   } catch (err) {
     logger.error('Error deleting article', { error: String(err) });
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /email-tag-mappings  — list all sender-to-tag mappings
+// ---------------------------------------------------------------------------
+
+router.get('/email-tag-mappings', async (req, res) => {
+  if (getSecret(req) !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const mappings = await getAllEmailTagMappings();
+    return res.json({ mappings });
+  } catch (err) {
+    logger.error('Error fetching email tag mappings', { error: String(err) });
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /email-tag-mappings  — create or update a mapping (upsert by email)
+// ---------------------------------------------------------------------------
+
+router.post('/email-tag-mappings', async (req, res) => {
+  if (getSecret(req) !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { email, tag } = req.body ?? {};
+  if (typeof email !== 'string' || !email.includes('@')) {
+    return res.status(400).json({ error: 'email must be a valid email address' });
+  }
+  if (typeof tag !== 'string' || !tag.trim()) {
+    return res.status(400).json({ error: 'tag is required' });
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedTag = tag.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, MAX_TAG_LEN);
+  if (!normalizedTag) return res.status(400).json({ error: 'tag must contain alphanumeric characters' });
+
+  try {
+    const mapping = await upsertEmailTagMapping(normalizedEmail, normalizedTag);
+    return res.status(201).json({ mapping });
+  } catch (err) {
+    logger.error('Error upserting email tag mapping', { error: String(err) });
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /email-tag-mappings/:id  — remove a mapping
+// ---------------------------------------------------------------------------
+
+router.delete('/email-tag-mappings/:id', async (req, res) => {
+  if (getSecret(req) !== config.RSS_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) return res.status(400).json({ error: 'Invalid mapping ID' });
+
+  try {
+    const deleted = await deleteEmailTagMapping(id);
+    if (!deleted) return res.status(404).json({ error: 'Mapping not found' });
+    return res.status(204).end();
+  } catch (err) {
+    logger.error('Error deleting email tag mapping', { error: String(err) });
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 });

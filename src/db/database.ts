@@ -33,6 +33,7 @@ export interface Article {
 export interface ArticleRow extends Omit<Article, 'id'> {
   id: number;
   newsletter_name: string;
+  sender_email: string | null;
   received_at: string;
 }
 
@@ -48,6 +49,7 @@ export interface ArticlePatch {
 export interface Newsletter {
   id?: number;
   name: string;
+  sender_email?: string | null;
   received_at: string;
 }
 
@@ -57,18 +59,18 @@ export async function initDb() {
   logger.info('Database ready');
 }
 
-export async function insertNewsletter(name: string, receivedAt: Date): Promise<number> {
+export async function insertNewsletter(name: string, senderEmail: string, receivedAt: Date): Promise<number> {
   const result = await db.execute({
-    sql: `INSERT INTO newsletters (name, received_at) VALUES (?, ?)`,
-    args: [name, receivedAt.toISOString()]
+    sql: `INSERT INTO newsletters (name, sender_email, received_at) VALUES (?, ?, ?)`,
+    args: [name, senderEmail || null, receivedAt.toISOString()]
   });
   return Number(result.lastInsertRowid);
 }
 
 export async function insertArticle(newsletterId: number, article: Article) {
   await db.execute({
-    sql: `INSERT INTO articles (newsletter_id, title, summary, url) VALUES (?, ?, ?, ?)`,
-    args: [newsletterId, article.title, article.summary, article.url]
+    sql: `INSERT INTO articles (newsletter_id, title, summary, url, tags) VALUES (?, ?, ?, ?, ?)`,
+    args: [newsletterId, article.title, article.summary, article.url, JSON.stringify(article.tags ?? [])]
   });
 }
 
@@ -100,6 +102,7 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
         a.pdf_type,
         a.processing_status,
         n.name as newsletter_name,
+        n.sender_email,
         n.received_at
       FROM articles a
       JOIN newsletters n ON a.newsletter_id = n.id
@@ -115,6 +118,7 @@ export async function getLatestArticles(limit: number, updatedSince?: string) {
     saved: Boolean(row.saved),
     pdf_type: row.pdf_type != null ? String(row.pdf_type) : null,
     processing_status: row.processing_status != null ? String(row.processing_status) : 'done',
+    sender_email: row.sender_email != null ? String(row.sender_email) : null,
   })) as ArticleRow[];
 }
 
@@ -318,6 +322,47 @@ export async function searchByOcrText(
     id: Number(row.id),
     title: String(row.title),
   }));
+}
+
+export async function getTagForEmail(email: string): Promise<string | null> {
+  const result = await db.execute({
+    sql: `SELECT tag FROM email_tag_mappings WHERE email = ? LIMIT 1`,
+    args: [email],
+  });
+  return result.rows.length > 0 ? String(result.rows[0].tag) : null;
+}
+
+export async function getAllEmailTagMappings(): Promise<{ id: number; email: string; tag: string; created_at: string }[]> {
+  const result = await db.execute({
+    sql: `SELECT id, email, tag, created_at FROM email_tag_mappings ORDER BY email`,
+    args: [],
+  });
+  return result.rows.map(row => ({
+    id: Number(row.id),
+    email: String(row.email),
+    tag: String(row.tag),
+    created_at: String(row.created_at),
+  }));
+}
+
+export async function upsertEmailTagMapping(email: string, tag: string): Promise<{ id: number; email: string; tag: string }> {
+  const result = await db.execute({
+    sql: `INSERT INTO email_tag_mappings (email, tag) VALUES (?, ?)
+          ON CONFLICT(email) DO UPDATE SET tag = excluded.tag`,
+    args: [email, tag],
+  });
+  const id = result.rowsAffected > 0 && result.lastInsertRowid
+    ? Number(result.lastInsertRowid)
+    : (await db.execute({ sql: `SELECT id FROM email_tag_mappings WHERE email = ?`, args: [email] })).rows[0].id as number;
+  return { id: Number(id), email, tag };
+}
+
+export async function deleteEmailTagMapping(id: number): Promise<boolean> {
+  const result = await db.execute({
+    sql: `DELETE FROM email_tag_mappings WHERE id = ?`,
+    args: [id],
+  });
+  return result.rowsAffected > 0;
 }
 
 export async function updateArticles(
