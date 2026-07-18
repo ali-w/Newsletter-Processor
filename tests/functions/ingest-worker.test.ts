@@ -8,6 +8,7 @@ const mockSendMessage = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../src/db/database', () => ({
   insertNewsletter: mockInsertNewsletter,
   insertArticle: mockInsertArticle,
+  getTagForEmail: jest.fn().mockResolvedValue(null),
 }));
 
 jest.mock('../../src/llm/parser', () => ({
@@ -60,7 +61,7 @@ describe('ingestWorker — POST /', () => {
       .send(validPayload);
     await flush();
     expect(mockExtractArticles).toHaveBeenCalledWith(validPayload.html);
-    expect(mockInsertNewsletter).toHaveBeenCalledWith('newsletter@example.com', expect.any(Date));
+    expect(mockInsertNewsletter).toHaveBeenCalledWith('newsletter@example.com', 'newsletter@example.com', expect.any(Date));
     expect(mockInsertArticle).toHaveBeenCalledTimes(1);
   });
 
@@ -71,7 +72,7 @@ describe('ingestWorker — POST /', () => {
       .set('x-cloudtasks-taskname', 'projects/test/tasks/123')
       .send(payload);
     await flush();
-    expect(mockInsertNewsletter).toHaveBeenCalledWith('fallback@example.com', expect.any(Date));
+    expect(mockInsertNewsletter).toHaveBeenCalledWith('fallback@example.com', 'fallback@example.com', expect.any(Date));
   });
 
   it('skips DB writes and does not crash when no articles are extracted', async () => {

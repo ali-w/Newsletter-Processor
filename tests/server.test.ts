@@ -74,7 +74,7 @@ describe('POST /webhook/cloudmailin', () => {
       .expect(200);
     expect(res.body.status).toBe('success');
     expect(res.body.message).toMatch(/1 article/);
-    expect(insertNewsletter).toHaveBeenCalledWith('newsletter@example.com', expect.any(Date));
+    expect(insertNewsletter).toHaveBeenCalledWith('newsletter@example.com', 'newsletter@example.com', expect.any(Date));
     expect(insertArticle).toHaveBeenCalledTimes(1);
   });
 
@@ -91,7 +91,7 @@ describe('POST /webhook/cloudmailin', () => {
       .post(`/webhook/cloudmailin?secret=${SECRET}`)
       .send({ headers: { From: 'fallback@example.com', Date: '' }, html: '<p>Content</p>' })
       .expect(200);
-    expect(insertNewsletter).toHaveBeenCalledWith('fallback@example.com', expect.any(Date));
+    expect(insertNewsletter).toHaveBeenCalledWith('fallback@example.com', 'fallback@example.com', expect.any(Date));
   });
 
   it('returns 200 with a no-articles message when the LLM extracts nothing', async () => {

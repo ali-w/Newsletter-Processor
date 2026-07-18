@@ -48,7 +48,7 @@ describe('Database Layer', () => {
     });
 
     it('inserts a newsletter and returns a numeric ID', async () => {
-      const id = await insertNewsletter('Test Newsletter', new Date());
+      const id = await insertNewsletter('Test Newsletter', 'test@example.com', new Date());
       expect(typeof id).toBe('number');
       expect(id).toBeGreaterThan(0);
     });
