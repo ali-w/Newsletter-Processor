@@ -84,14 +84,21 @@ app.post('/webhook/cloudmailin', async (req, res) => {
     }
 
     const payload = req.body;
-    // headers.From is "Display Name <email>" — more stable than envelope.from which is a garbled bounce address
-    const rawFrom = String(payload.headers?.From ?? payload.envelope?.from ?? '');
+    // headers.From is "Display Name <email>" — more stable than envelope.from which is a garbled bounce address.
+    // Case-insensitive lookup because MTAs fold header names inconsistently.
+    const headers: Record<string, string | string[]> = payload.headers ?? {};
+    const getHeader = (name: string) => {
+      const key = Object.keys(headers).find(k => k.toLowerCase() === name.toLowerCase());
+      const val = key ? headers[key] : undefined;
+      return val ? String(Array.isArray(val) ? val[0] : val) : '';
+    };
+    const rawFrom = getHeader('from') || String(payload.envelope?.from ?? '');
     const angleMatch = rawFrom.match(/<([^>]+)>/);
     const senderEmail = (angleMatch ? angleMatch[1] : rawFrom).toLowerCase().trim();
     const senderName = angleMatch
       ? rawFrom.replace(/<[^>]+>/, '').trim().replace(/^"|"$/g, '').trim() || senderEmail
       : senderEmail || 'Unknown Sender';
-    const receivedAtStr = payload.headers?.Date;
+    const receivedAtStr = getHeader('date');
     const receivedAt = receivedAtStr ? new Date(receivedAtStr) : new Date();
     const content = payload.html || payload.plain || '';
 
